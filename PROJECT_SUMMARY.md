@@ -146,7 +146,7 @@ pip install -r requirements.txt
 playwright install chromium
 
 # 2) 登录（仅一次）
-python run.py --login   # 浏览器扫码，状态落盘至 browser_profile/
+python app.py --login   # 浏览器扫码，状态落盘至 browser_profile/
 
 # 3) 配置
 #   a) 命令行：编辑 config.py → 填 MONITOR_ITEMS / Bark 等

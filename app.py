@@ -13,6 +13,7 @@ import argparse
 import ctypes
 import logging
 import logging.handlers
+import hmac
 import os
 import sys
 import threading
@@ -30,7 +31,7 @@ if sys.platform == "win32":
 
 from flask import Flask, jsonify, render_template, request
 
-from config import MONITOR_SETTINGS
+from config import DASHBOARD_TOKEN, MONITOR_SETTINGS
 from database import Database, parse_exclude_keywords
 from monitor_service import MonitorService, build_monitor_settings, seed_products_from_config
 from notifier import BarkNotifier, NotifierManager
@@ -59,7 +60,13 @@ _setup_logging()
 logger = logging.getLogger("dashboard")
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DB_PATH = os.path.join(BASE_DIR, "monitor.db")
+DATA_DIR = os.path.abspath(os.path.join(BASE_DIR, MONITOR_SETTINGS.get("data_dir", "./data")))
+os.makedirs(DATA_DIR, exist_ok=True)
+DB_PATH = os.path.join(DATA_DIR, "monitor.db")
+LEGACY_DB_PATH = os.path.join(BASE_DIR, "monitor.db")
+if os.path.exists(LEGACY_DB_PATH) and not os.path.exists(DB_PATH):
+    import shutil
+    shutil.copy2(LEGACY_DB_PATH, DB_PATH)
 db = Database(DB_PATH)
 db.seed_bark_from_config()
 notifier = NotifierManager(db)
@@ -68,6 +75,24 @@ service = MonitorService(db, notifier)
 APP_STARTED_AT = time.time()
 
 app = Flask(__name__, static_folder="static", template_folder="templates")
+
+
+@app.before_request
+def require_dashboard_token():
+    if not request.path.startswith("/api/") or request.path == "/api/healthz":
+        return None
+    if not DASHBOARD_TOKEN:
+        return None
+    supplied = request.headers.get("X-Auth-Token", "")
+    if not supplied:
+        supplied = request.headers.get("Authorization", "")
+        if supplied.lower().startswith("bearer "):
+            supplied = supplied[7:].strip()
+    if not supplied:
+        supplied = request.args.get("token", "")
+    if not hmac.compare_digest(supplied, DASHBOARD_TOKEN):
+        return jsonify({"ok": False, "error": "unauthorized"}), 401
+    return None
 
 
 # 本地开发环境禁用静态文件缓存，避免浏览器加载旧版 JS/CSS 导致接口不匹配

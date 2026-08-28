@@ -72,9 +72,10 @@ MONITOR_ITEMS = [
 ### 5. 启动监控
 
 ```bash
-python run.py              # 持续运行
-python run.py --once       # 只检查一轮（调试用）
-python run.py --stats      # 查看运行统计
+python app.py              # 唯一常驻入口：仪表盘 + 后台监控
+python run.py --login      # 运维操作：扫码登录
+python run.py --once       # 运维操作：只检查一轮
+python run.py --stats      # 运维操作：查看 SQLite 统计
 ```
 
 浏览器窗口会保持打开（可最小化），这是**故意的**——闲鱼风控会拦截无头浏览器。

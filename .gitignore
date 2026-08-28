@@ -1,5 +1,7 @@
 # 生成的数据
-data/
+data/monitor.db
+data/monitor.db-shm
+data/monitor.db-wal
 browser_profile/
 
 # Python

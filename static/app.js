@@ -6,10 +6,10 @@ const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => document.querySelectorAll(sel);
 
 async function api(url, opts = {}) {
-  const resp = await fetch(url, {
-    headers: { 'Content-Type': 'application/json' },
-    ...opts,
-  });
+  const headers = { 'Content-Type': 'application/json', ...(opts.headers || {}) };
+  const token = localStorage.getItem('dashboard_token');
+  if (token) headers['X-Auth-Token'] = token;
+  const resp = await fetch(url, { ...opts, headers });
   if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
   return resp.json();
 }

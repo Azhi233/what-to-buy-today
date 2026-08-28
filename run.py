@@ -12,6 +12,7 @@
 import argparse
 import asyncio
 import logging
+import os
 import sys
 
 if sys.platform == "win32":
@@ -82,8 +83,10 @@ async def main():
     parser.add_argument("--stats", action="store_true", help="显示 SQLite 历史统计信息")
     args = parser.parse_args()
 
+    db_path = os.path.join(MONITOR_SETTINGS.get("data_dir", "./data"), "monitor.db")
+
     if args.stats:
-        db = Database("monitor.db")
+        db = Database(db_path)
         stats = db.get_stats()
         print(f"已发现商品: {stats['total_items']}")
         print(f"累计通知: {stats['total_notified']}")
@@ -105,7 +108,7 @@ async def main():
         await cmd_login(GoofishMonitor(MONITOR_SETTINGS))
         return
 
-    db = Database("monitor.db")
+    db = Database(db_path)
     notifier = NotifierManager(db)
     service = MonitorService(db, notifier)
     service.start()

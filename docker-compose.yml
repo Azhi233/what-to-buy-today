@@ -6,7 +6,6 @@ services:
     volumes:
       - ./browser_profile:/app/browser_profile
       - ./data:/app/data
-      - ./monitor.db:/app/monitor.db
     restart: unless-stopped
     environment:
       - TZ=Asia/Shanghai
