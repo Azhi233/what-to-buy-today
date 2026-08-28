@@ -188,3 +188,104 @@ except Exception as e:
 | **P0 立即修** | P0-1 / P0-2 / P0-3 / P0-4 | 决定"是否买到对且安全的产品" |
 | **P1 尽快修** | P1-5 ~ P1-9 | 状态误导、双管线不一致、通知标记失效 |
 | **P2 后续优化** | P2-10 ~ P2-18 | 健壮性、边界条件、体验 |
+
+---
+
+# 第二轮复查（Cursor 修复后）
+
+> 复查结论：18 项中多数已正确修复（见文末"验证通过"），但**修复本身引入了 2 个严重回归 + 3 个中危问题**，另有若干遗留小项。请按 R1 → R5 优先处理。
+> 说明：R 项编号为第二轮新增，文件行号基于当前（修复后）版本。
+
+## 回归问题（新引入，优先处理）
+
+### - [x] R1 【严重】"卖家信用未知"硬过滤过于激进，会静默过滤约 35% 商品
+> ✅ 修复说明：新增 `STRICT_UNKNOWN_CREDIT` 配置，默认将未知信用标记为警告而非硬过滤；老商品本轮缺失信用时回退使用数据库中的历史信用。
+- **文件**：`monitor.py` 函数 `evaluate_item()`（约 756–766 行）
+- **问题**：P2-11 把"信用为空/无法解析"改为硬过滤（`hard.append("卖家信用未知")`）。但实测 `monitor.db` 中 **172 条商品有 61 条（35%）`seller_credit` 为空**：API 提取路径 `_parse_api_item()` 从不写 `seller_credit`，DOM 的 `[class*="credit-container"]` 选择器也非 100% 命中。
+- **影响**：
+  1. 这些商品的新匹配、降价提醒会被**静默吞掉**（含之前已匹配/已通知的商品）。
+  2. 叠加 P0-1：老商品每轮重新评估用的是**本轮 DOM 刚抓到的 credit**，本轮没抓到（空）时，即便库里已存"信用极好"也会被误判"未知"，从而丢失降价提醒。
+- **建议**：把"未知"从硬过滤改为**标记(warn) + 可配置**（如 `MIN_SELLER_CREDIT=""` 时关闭信用过滤，或新增 `strict_unknown_credit` 默认 False）；对老商品重评估时，若本轮 credit 为空则**回退使用库中已存的 `seller_credit`**。
+
+### - [x] R2 【严重】`run.py --once` 存在竞态，大概率启动约 1 秒即退出、未执行任何检查
+> ✅ 修复说明：`--once` 现在等待监控线程完成首轮检查（以 `last_check_at` 和线程存活状态为准），避免线程尚未启动就退出。
+- **文件**：`run.py` 函数 `main()`（约 198–203 行）
+- **问题**：`service.start()` 返回后立刻判断 `while service.status in ("starting","running","checking") and service.last_check_at is None`。线程尚未把 `service.status` 从初始 `"stopped"` 改成 `"starting"` 时，条件为假 → 跳过循环 → `await asyncio.sleep(1)` → `service.stop()`。
+- **影响**：`--once` 几乎不会真正完成一轮检查（浏览器启动通常需数秒）。
+- **建议**：等待条件改为只依赖 `last_check_at` 与线程存活，去掉对 status 的依赖：
+  ```python
+  service.start()
+  while service.last_check_at is None and service._thread and service._thread.is_alive():
+      await asyncio.sleep(0.2)
+  service.stop()
+  ```
+
+### - [x] R3 【中】P2-15 Bark 编辑前端自相矛盾，无法"留空保持原 Key"
+> ✅ 修复说明：编辑 Bark 时允许 Key 留空以保持原值，并移除重复请求和遗留逻辑。
+- **文件**：`static/app.js` 函数 `editBarkTarget()`（679 行置空）与 `#bark-edit-form` submit（710–715 行）
+- **问题**：后端 `PUT` 已支持空 key 保持原值，`editBarkTarget` 也把编辑框置空；但提交处理器仍 `if (!payload.bark_key) { toast('Bark Key 不能为空'); return; }` 拦截空 key。
+- **影响**：用户想只改 label/server 而不重输 Key 时，被前端拦下，与后端"留空保持原值"逻辑矛盾。
+- **建议**：编辑场景删除该前端非空校验（仅新增场景保留）；顺带清理 `editBarkTarget` 里的遗留注释/空 try 块。
+
+### - [x] R4 【中】P0-2 万元修正仍不完整：高价值监控下低价小数仍被误判为万元
+> ✅ 修复说明：无显式单位时，万元候选值必须不超过监控上限的合理量级（90%以内）；显式万元单位仍直接按单位解析，高价值监控中的低价小数不再放大。
+- **文件**：`monitor.py` 函数 `parse_price_extended()`（约 116–122 行）
+- **问题**：判定条件是 `explicit_wan or max_price >= 10000`。实测：
+  - `max_price=28888` 时 `¥3.5 → 35000`、`¥9.9 → 99000`（**仍误判**，低价配件被放大 1 万倍）；
+  - `max_price=5000` 时真实 `3.20万` 被读成 `3.2` 元（虽被 min_price 过滤，但会污染价格历史的 min/avg）。
+- **影响**：高价值监控（车、显卡、镜头等 max≥10000）下低价小件仍会污染统计与降价判断。
+- **建议**：改用"万元候选值是否落在合理区间"判断——`wan*10000` 与 `max_price` 量级相近（如 `wan*10000 <= max_price*3`）才按万元，否则按字面；或优先解析价格单位节点文本。
+
+### - [x] R5 【中】P2-13 非阻塞只改了一半：降价通知与登录告警仍同步阻塞事件循环
+> ✅ 修复说明：降价通知与登录异常告警均改为 `asyncio.to_thread()`，SMTP/Bark 网络等待不会阻塞监控事件循环。
+- **文件**：`monitor_service.py` 函数 `_notify_drop()`（约 557 行）与 `_check_zero_streak_alert()`（约 301 行）
+- **问题**：`_notify_match` 与摘要已改 `asyncio.to_thread(self.notifier.send, ...)`，但这两处仍是 `self.notifier.send(...)` 同步调用。
+- **影响**：SMTP 超时 15s、Bark `time.sleep` 等仍会卡住监控线程，P2-13 未完全落地。
+- **建议**：这两处同样改为 `await asyncio.to_thread(self.notifier.send, ...)`。
+
+## 遗留 / 小问题（低优先级）
+
+### - [x] R6 `run.py --stats` 读陈旧数据 + 大量死代码
+> ✅ 修复说明：`--stats` 改为读取 SQLite 实时统计；移除旧文件存储监控路径及未使用的旧监控函数。
+- **文件**：`run.py`（27、30、71–158 行）
+- **问题**：`check_once / _notify_product / run_monitor_forever / filter_items / SeenStorage` 已不被 `main()` 调用（死代码）；`--stats` 仍读 `data/stats.json`（文件式统计已停止更新），显示陈旧/归零数据。
+- **建议**：删除死代码；`--stats` 改为读 SQLite（`db.get_stats()`）。
+
+### - [x] R7 `app.py` 重复赋值 `APP_STARTED_AT`
+> ✅ 修复说明：保留单一启动时间初始化，健康探针使用同一时间基准。
+- **文件**：`app.py`（63 与 70 行）
+- **问题**：`APP_STARTED_AT = time.time()` 出现两次。
+- **建议**：保留一处即可（建议保留 db/notifier/service 初始化后的那一处）。
+
+### - [x] R8 `/api/test-notify` 的 `ok` 由布尔变列表，语义易错
+> ✅ 修复说明：接口现在返回布尔类型 `ok`，并通过 `channels` 返回实际成功的外部渠道列表。
+- **文件**：`app.py`（270–277 行）
+- **问题**：P1-8 后 `notifier.send()` 返回 `list[str]`，`{"ok": ok}` 把列表当布尔返回；前端 `if(r.ok)` 对空/非空列表仍能工作，但语义不清晰。
+- **建议**：返回 `{"ok": bool(ok), "channels": ok}`，前端按 `r.ok` 布尔判断。
+
+### - [x] R9 未使用导入
+> ✅ 修复说明：清理 `monitor_service.py` 中未使用的过滤/信用导入，减少静态检查噪声。
+- **文件**：`monitor_service.py`（16 行 `filter_items`、`credit_score`）
+- **建议**：清理未使用导入。
+
+### - [x] R10 `login_ok` 前端未展示
+> ✅ 修复说明：状态刷新现在消费真实登录状态，未登录时状态栏显示“未登录，请扫码登录”并使用错误状态样式。
+- **文件**：`app.py`（107 行已返回）与 `static/app.js`（`refreshStatus` 未使用 `login_ok`）
+- **问题**：P1-6 已返回真实登录状态，但 UI 未消费该字段。
+- **建议**：状态栏在 `monitor_status==="error"` 或 `login_ok===false` 时展示"未登录/需扫码"提示。
+
+## 第二轮验证通过项（无需重复排查）
+
+- P0-1 降价重评估逻辑 ✅（每轮对老商品重跑 `evaluate_item`，仅 `pass` 才推降价）
+- P0-3 型号匹配 ✅（实测 `iPhone 15 256G`/`iPhone 15 Pro`/`MacBook Air M3` 均正确被拦）
+- P0-4 浏览器异常 re-raise ✅（`_is_browser_error` 下沉到 monitor.py，无循环导入）
+- P1-5 登录失败状态 ✅（`_login_failed` 标志阻止 finally 覆盖）
+- P1-6 `login_ok` 返回真实值 ✅
+- P1-8 ConsoleNotifier 不再计入成功渠道 ✅
+- P1-9 PUT 价格校验 ✅（含 min≤max）
+- P2-10 仅按逗号分隔 ✅（实测 `iPhone 14` 保持完整）
+- P2-12 时区统一 `localtime` ✅
+- P2-14 降价阈值（≥20 元或 ≥5%）✅（含除零保护）
+- P2-16 interval 解析回退 ✅
+- P2-17 `products_seeded` 标志 ✅
+- P2-18 `item_id` 前端 `esc()` ✅

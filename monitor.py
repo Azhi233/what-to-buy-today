@@ -117,7 +117,12 @@ def parse_price_extended(text: str, price_num: str = "", price_dec: str = "",
         # 仅凭 number+decimal 无法区分 3.5 元配件和 3.5 万元设备，默认按字面价格。
         explicit_wan = "万" in (text or "") or "万" in (title or "")
         scale_supported = max_price >= 10000 if max_price else False
-        if wan_scale and 1 <= num_val < 10 and (explicit_wan or scale_supported):
+        plausible_wan = max_price > 0 and wan * 10000 <= max_price * 3
+        # 没有单位时，万元候选值还必须与监控上限处于同一数量级。
+        if not explicit_wan and max_price > 0 and wan * 10000 > max_price * 0.9:
+            plausible_wan = False
+        # 显式万元单位优先；若没有单位，仅在监控量级合理时换算。
+        if wan_scale and 1 <= num_val < 10 and (explicit_wan or plausible_wan):
             return wan * 10000, True
         return wan, False
 
@@ -725,6 +730,7 @@ def evaluate_item(
     exclude_keywords: list[str],
     must_include: list[str] = None,
     min_seller_credit: str = "信用一般",
+    strict_unknown_credit: bool = False,
     median_price: float = 0,
     scam_rules: Optional[dict] = None,
     anomaly_ratio: float = 0.5,
@@ -761,9 +767,11 @@ def evaluate_item(
         if score is not None and threshold is not None and score < threshold:
             hard.append(f"卖家信用过低({credit})")
         elif score is None:
-            hard.append("卖家信用未知")
-    else:
+            (hard if strict_unknown_credit else warn).append("卖家信用未知")
+    elif strict_unknown_credit:
         hard.append("卖家信用未知")
+    else:
+        warn.append("卖家信用未知")
 
     # 引流文案识别
     scam_hard, scam_warn = detect_scam(

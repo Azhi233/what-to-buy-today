@@ -11,7 +11,8 @@ import threading
 import time
 from datetime import datetime
 
-from config import MIN_SELLER_CREDIT, MONITOR_ITEMS, MONITOR_SETTINGS, SCAM_RULES
+from config import (MIN_SELLER_CREDIT, MONITOR_ITEMS, MONITOR_SETTINGS, SCAM_RULES,
+                    STRICT_UNKNOWN_CREDIT)
 from database import Database, parse_exclude_keywords
 from monitor import GoofishMonitor, credit_score, evaluate_item, filter_items
 from notifier import NotifierManager
@@ -298,7 +299,7 @@ class MonitorService:
         self.status = "error"
         self.db.log_check("*", "auth_expired", 0, 0, self.last_error)
         try:
-            self.notifier.send(
+            await asyncio.to_thread(self.notifier.send,
                 "闲鱼监控 — 登录异常告警",
                 "连续3轮未获取到商品，可能是登录过期或被风控。\n请运行 python run.py --login 重新扫码。",
                 "",
@@ -433,6 +434,7 @@ class MonitorService:
                     exclude_keywords=exclude_keywords,
                     must_include=must_include,
                     min_seller_credit=MIN_SELLER_CREDIT,
+                    strict_unknown_credit=STRICT_UNKNOWN_CREDIT,
                     median_price=median_price,
                     scam_rules=SCAM_RULES,
                 )
@@ -443,6 +445,9 @@ class MonitorService:
                 else:
                     filtered.append((item, verdict["hard"]))
             else:
+                # 页面本轮没抓到信用时，回退到数据库里最后一次可信值。
+                if not item.get("seller_credit") and existing["seller_credit"]:
+                    item["seller_credit"] = existing["seller_credit"]
                 # 老商品每次降价也必须重新过硬校验，不能沿用首次入库时的结论。
                 verdict = evaluate_item(
                     item,
@@ -554,7 +559,7 @@ class MonitorService:
             f"标题: {item['title']}\n"
         )
         url = item.get("url", "")
-        ok = self.notifier.send(title, content, url)
+        ok = await asyncio.to_thread(self.notifier.send, title, content, url)
         self.db.log_notification(
             item["item_id"], keyword, f"[降价] {item['title']}", item["price"], url,
             "推送" if ok else "控制台",
