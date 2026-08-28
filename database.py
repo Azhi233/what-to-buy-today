@@ -3,10 +3,23 @@ SQLite 数据存储层。
 存储：监控商品、发现的商品池、价格历史、降价记录、检查日志、通知记录、运行设置。
 """
 
+import os
 import sqlite3
 import threading
 import time
 from typing import Optional
+
+
+def resolve_db_path(data_dir: str = "./data") -> str:
+    """返回以模块目录为基准的数据库绝对路径，并确保数据目录存在。
+
+    app.py 与 run.py 共用此函数，避免相对 CWD 导致两个入口打开不同数据库。
+    """
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    abs_dir = os.path.abspath(os.path.join(base_dir, data_dir))
+    os.makedirs(abs_dir, exist_ok=True)
+    return os.path.join(abs_dir, "monitor.db")
+
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS monitored_products (
@@ -300,7 +313,8 @@ class Database:
             old_price = old["price"] or 0
             price_dropped = bool(
                 old_price > 0 and price < old_price
-                and (old_price - price >= 20 or (old_price - price) / old_price >= 0.05)
+                and (old_price - price >= PRICE_DROP_ABS_MIN
+                     or (old_price - price) / old_price >= PRICE_DROP_RATIO_MIN)
             )
             self._execute(
                 "UPDATE items SET title=?, price=?, url=?, image=?, location=?, status=?,"
@@ -352,6 +366,12 @@ class Database:
         rows = self._query("SELECT DISTINCT keyword FROM items ORDER BY keyword")
         return [r["keyword"] for r in rows]
 
+    def clear_items(self) -> None:
+        """清空商品池、价格历史与降价记录（保留监控配置与通知日志）。"""
+        self._execute("DELETE FROM items")
+        self._execute("DELETE FROM price_history")
+        self._execute("DELETE FROM item_price_changes")
+
     # ─────────────────────────────────────
     #  价格历史 / 降价记录
     # ─────────────────────────────────────
@@ -375,6 +395,13 @@ class Database:
             (keyword, limit),
         )
 
+    def get_all_price_history(self, limit: int = 200) -> list[sqlite3.Row]:
+        """全部关键词的价格历史（按 epoch 排序，兼容旧数据）。"""
+        return self._query(
+            "SELECT * FROM price_history ORDER BY COALESCE(NULLIF(epoch,0), id) DESC LIMIT ?",
+            (limit,),
+        )
+
     def add_price_change(self, item_id: str, keyword: str, old_price: float,
                          new_price: float, title: str) -> None:
         self._execute(
@@ -387,6 +414,14 @@ class Database:
         return self._query(
             "SELECT * FROM item_price_changes ORDER BY id DESC LIMIT ?", (limit,)
         )
+
+    def get_last_price_change(self, item_id: str) -> Optional[sqlite3.Row]:
+        """返回某商品最近一次降价记录，用于推送降价提醒时展示原价。"""
+        rows = self._query(
+            "SELECT * FROM item_price_changes WHERE item_id=? ORDER BY id DESC LIMIT 1",
+            (item_id,),
+        )
+        return rows[0] if rows else None
 
     # ─────────────────────────────────────
     #  检查日志 / 通知记录
@@ -432,6 +467,10 @@ class Database:
             cur = self._conn.execute(
                 "DELETE FROM price_history WHERE julianday('now','localtime')-julianday(check_time) > ?", (history_days,))
             stats["history_deleted"] = cur.rowcount
+            # 降价记录与商品池同保留期，避免该表无限增长
+            cur = self._conn.execute(
+                "DELETE FROM item_price_changes WHERE julianday('now','localtime')-julianday(time) > ?", (items_days,))
+            stats["price_changes_deleted"] = cur.rowcount
             cur = self._conn.execute(
                 "DELETE FROM checks_log WHERE id NOT IN (SELECT id FROM checks_log ORDER BY id DESC LIMIT ?)",
                 (checks_keep,))
@@ -522,6 +561,10 @@ def parse_exclude_keywords(raw: str) -> list[str]:
     parts = raw.replace("，", ",").split(",")
     return [p.strip() for p in parts if p.strip()]
 
+
+# 降价判定阈值（P2-14）：绝对降幅 ≥20 元 或 相对降幅 ≥5% 才记为降价提醒
+PRICE_DROP_ABS_MIN = 20.0
+PRICE_DROP_RATIO_MIN = 0.05
 
 # 保留策略默认值（B1）
 DEFAULT_RETENTION = {

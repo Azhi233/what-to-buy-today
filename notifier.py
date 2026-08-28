@@ -278,29 +278,3 @@ class NotifierManager:
             except Exception as e:
                 logger.error(f"[{type(channel).__name__}] 发送异常: {e}")
         return success_channels
-
-    def report_channels(self) -> str:
-        """返回启用的通知渠道列表。"""
-        enabled = self._get_all_channels()
-        if len(enabled) <= 1:
-            return "无（仅控制台日志）"
-        names = []
-        for c in enabled:
-            if isinstance(c, ConsoleNotifier):
-                continue
-            if isinstance(c, BarkNotifier):
-                names.append(f"Bark:{c.display_name}(已开启)")
-            else:
-                name = type(c).__name__.replace("Notifier", "")
-                names.append(f"{name}(已开启)")
-        return ", ".join(names) if names else "无（仅控制台日志）"
-
-    def get_bark_targets(self) -> list[dict]:
-        """返回所有 Bark 目标（供仪表盘展示）。"""
-        if self.db is None:
-            if self._legacy_bark and self._legacy_bark.enabled:
-                return [{"id": 0, "label": "默认", "server": "https://api.day.app",
-                         "bark_key": self._legacy_bark.key, "enabled": True}]
-            return []
-        rows = self.db.get_bark_targets()
-        return [dict(r) for r in rows]

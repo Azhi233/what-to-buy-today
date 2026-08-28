@@ -11,13 +11,34 @@ import threading
 import time
 from datetime import datetime
 
-from config import (MIN_SELLER_CREDIT, MONITOR_ITEMS, MONITOR_SETTINGS, SCAM_RULES,
-                    STRICT_UNKNOWN_CREDIT)
+from config import (MIN_SELLER_CREDIT, MONITOR_ITEMS, MONITOR_SETTINGS, PRICE_ANOMALY_RATIO,
+                    SCAM_RULES, STRICT_UNKNOWN_CREDIT)
 from database import Database, parse_exclude_keywords
 from monitor import GoofishMonitor, evaluate_item
-from notifier import NotifierManager
+from notifier import BarkNotifier, NotifierManager
 
 logger = logging.getLogger(__name__)
+
+
+# ── 监控循环调优常量（C5：阈值收敛为具名常量并注释理由）──
+BROWSER_START_ATTEMPTS = 3            # 浏览器启动失败重试次数，见 H-02
+BROWSER_START_RETRY_INTERVAL = 5      # 浏览器启动失败重试间隔（秒），见 H-02
+BROWSER_RESTART_BACKOFF_INIT = 5      # 崩溃指数退避起始值（秒），见 H-02
+BROWSER_RESTART_BACKOFF_MAX = 120     # 崩溃指数退避上限（秒），见 H-02
+BROWSER_RESTART_COOLDOWN = 2          # 重启前等待进程/端口完全释放（秒）
+NON_BROWSER_ERROR_RETRY_INTERVAL = 30  # 非浏览器异常后的等待间隔（秒），避免忙循环
+INTERVAL_JITTER_MINUTES = 5           # 检查间隔随机抖动范围（±分钟），降低固定行为指纹，见 W-02
+KEYWORD_DELAY = 2                     # 关键词之间的请求间隔（秒），降低请求频率，见 W-02
+RECYCLE_ROUNDS = 50                   # 定时回收：每运行 N 轮主动重启浏览器，缓解慢性泄漏，见 B2
+RECYCLE_TIME_SECONDS = 12 * 3600      # 定时回收：每运行 N 秒主动重启浏览器，见 B2
+CLEANUP_MIN_INTERVAL = 20 * 3600      # 每日自动清理最小间隔（秒），见 B1
+CLEANUP_AFTER_HOUR = 3                # 每日自动清理最早本地时间（小时），避免刚启动就清理
+ZERO_STREAK_THRESHOLD = 3             # 连续 N 轮零结果判定登录/风控异常，见 B3
+ALERT_DEDUP_SECONDS = 6 * 3600        # 同类告警去重窗口（秒），见 H-06
+BATCH_SUMMARY_THRESHOLD = 10          # 单轮匹配数超过该值合并为摘要推送，见 B4
+IQR_MULTIPLIER = 1.5                  # IQR 离群值剔除系数（1.5 倍四分位距），见 T-01
+IQR_MIN_SAMPLES = 5                   # IQR 剔除所需最少样本数，样本过少不剔除
+DEFAULT_MAX_PRICE = 99999             # config 缺省 max_price 时的兜底上限（元），几乎不设上限
 
 
 class BrowserDeadError(RuntimeError):
@@ -56,7 +77,7 @@ def seed_products_from_config(db: Database) -> int:
             continue
         db.add_product(
             keyword=keyword,
-            max_price=item.get("max_price", 99999),
+            max_price=item.get("max_price", DEFAULT_MAX_PRICE),
             min_price=item.get("min_price", 0),
             exclude_keywords=",".join(item.get("exclude_keywords", [])),
             must_include=",".join(item.get("must_include", [])),
@@ -104,9 +125,12 @@ class MonitorService:
         self._thread = threading.Thread(target=self._thread_main, daemon=True, name="monitor")
         self._thread.start()
 
-    def stop(self):
+    def stop(self, timeout: float = 10.0):
         self._stop_event.set()
         self._trigger_event.set()
+        thread = self._thread
+        if thread and thread is not threading.current_thread():
+            thread.join(timeout=max(0.0, timeout))
 
     def trigger_check(self):
         """立即触发一轮检查。"""
@@ -133,7 +157,7 @@ class MonitorService:
         self.status = "running"
         logger.info("监控服务已启动")
 
-        restart_delay = 5
+        restart_delay = BROWSER_RESTART_BACKOFF_INIT
         self._round_count = 0
         self._last_browser_restart_at = time.time()
         self._zero_streak = 0
@@ -144,7 +168,7 @@ class MonitorService:
                 try:
                     await self._check_round(monitor)
                     self._round_count += 1
-                    restart_delay = 5  # 成功后重置退避
+                    restart_delay = BROWSER_RESTART_BACKOFF_INIT  # 成功后重置退避
                     # B2: 定时回收（50轮 或 12小时）
                     await self._maybe_recycle_browser(monitor)
                     # B1: 每日自动清理（每天一次，03:00后首次触发）
@@ -157,7 +181,7 @@ class MonitorService:
                     logger.error(f"监控轮次异常: {e}")
                     if not _is_browser_error(e):
                         logger.info("非浏览器异常，等待下轮再试")
-                        await asyncio.sleep(30)
+                        await asyncio.sleep(NON_BROWSER_ERROR_RETRY_INTERVAL)
                         continue
                     async with self._browser_lock:
                         ok = await self._restart_browser(monitor)
@@ -165,16 +189,17 @@ class MonitorService:
                         break
                     logger.warning(f"{restart_delay} 秒后自动重试...")
                     await asyncio.sleep(restart_delay)
-                    restart_delay = min(restart_delay * 2, 120)
+                    restart_delay = min(restart_delay * 2, BROWSER_RESTART_BACKOFF_MAX)
                     continue  # 立即重试本轮
 
                 try:
-                    interval = float(self.db.get_setting("interval_minutes", 30))
+                    interval = float(self.db.get_setting(
+                        "interval_minutes", str(MONITOR_SETTINGS.get("interval_minutes", 30))))
                 except (TypeError, ValueError):
-                    interval = 30.0
-                    logger.warning("interval_minutes 无效，回退到 30 分钟")
+                    interval = float(MONITOR_SETTINGS.get("interval_minutes", 30))
+                    logger.warning("interval_minutes 无效，回退到配置默认值")
                 # ±5分钟随机抖动，降低固定间隔的行为指纹
-                jitter = random.uniform(-5, 5)
+                jitter = random.uniform(-INTERVAL_JITTER_MINUTES, INTERVAL_JITTER_MINUTES)
                 effective = max(1, interval + jitter)
                 self.next_check_at = time.time() + effective * 60
                 logger.info(f"本轮检查完成，约 {effective:.1f} 分钟后进行下一轮（抖动 ±5min）")
@@ -200,7 +225,8 @@ class MonitorService:
                 self.status = "stopped"
             logger.info("监控服务已停止")
 
-    async def _start_browser_with_retry(self, monitor: GoofishMonitor, attempts: int = 3) -> bool:
+    async def _start_browser_with_retry(self, monitor: GoofishMonitor,
+                                        attempts: int = BROWSER_START_ATTEMPTS) -> bool:
         """启动浏览器，失败时重试数次。"""
         for i in range(attempts):
             try:
@@ -209,7 +235,7 @@ class MonitorService:
             except Exception as e:
                 self.last_error = str(e)
                 logger.error(f"浏览器启动失败 ({i + 1}/{attempts}): {e}")
-                await asyncio.sleep(5)
+                await asyncio.sleep(BROWSER_START_RETRY_INTERVAL)
         return False
 
     async def _restart_browser(self, monitor: GoofishMonitor) -> bool:
@@ -219,7 +245,7 @@ class MonitorService:
             await monitor.stop()
         except Exception:
             pass
-        await asyncio.sleep(2)  # 等待进程/端口完全释放
+        await asyncio.sleep(BROWSER_RESTART_COOLDOWN)  # 等待进程/端口完全释放
         try:
             await monitor.start()
             logger.info("浏览器已自动重启")
@@ -244,11 +270,11 @@ class MonitorService:
     async def _maybe_recycle_browser(self, monitor: GoofishMonitor):
         """50轮 或 12小时 触发主动重启，减少慢性泄漏."""
         now = time.time()
-        due_round = self._round_count > 0 and self._round_count % 50 == 0
-        due_time = (now - (self._last_browser_restart_at or now)) >= 12 * 3600
+        due_round = self._round_count > 0 and self._round_count % RECYCLE_ROUNDS == 0
+        due_time = (now - (self._last_browser_restart_at or now)) >= RECYCLE_TIME_SECONDS
         if not (due_round or due_time):
             return
-        reason = "50轮" if due_round else "12小时"
+        reason = f"{RECYCLE_ROUNDS}轮" if due_round else f"{RECYCLE_TIME_SECONDS // 3600}小时"
         logger.info(f"定时回收：已运行 {self._round_count} 轮，触发浏览器重启（{reason}）")
         async with self._browser_lock:
             ok = await self._restart_browser(monitor)
@@ -259,12 +285,12 @@ class MonitorService:
     async def _maybe_cleanup(self):
         """每天凌晨后首次触发保留策略清理（避免每轮都执行）。"""
         now = time.time()
-        if self._last_cleanup_at and now - self._last_cleanup_at < 20 * 3600:
+        if self._last_cleanup_at and now - self._last_cleanup_at < CLEANUP_MIN_INTERVAL:
             return
         # 仅在本地时间 03:00 之后触发，避免刚启动就清理
         try:
             hour = datetime.now().hour
-            if self._last_cleanup_at is None and hour < 3:
+            if self._last_cleanup_at is None and hour < CLEANUP_AFTER_HOUR:
                 return
         except Exception:
             pass
@@ -289,10 +315,10 @@ class MonitorService:
         else:
             self._zero_streak = 0
             return
-        if self._zero_streak < 3:
+        if self._zero_streak < ZERO_STREAK_THRESHOLD:
             return
         now = time.time()
-        if self._last_auth_alert_at and now - self._last_auth_alert_at < 6 * 3600:
+        if self._last_auth_alert_at and now - self._last_auth_alert_at < ALERT_DEDUP_SECONDS:
             return
         self._last_auth_alert_at = now
         self.last_error = "连续3轮未获取到商品，疑似登录过期或被风控"
@@ -304,8 +330,8 @@ class MonitorService:
                 "连续3轮未获取到商品，可能是登录过期或被风控。\n请运行 python run.py --login 重新扫码。",
                 "",
             )
-        except Exception:
-            pass
+        except Exception as e:
+            logger.error(f"登录异常告警推送失败: {e}")
 
     # ─────────────────────────────────────
     #  单轮检查
@@ -351,7 +377,7 @@ class MonitorService:
                         raise  # 浏览器问题，交给外层重启
                     logger.error(f"[{keyword}] 检查失败: {e}")
                     self.db.log_check(keyword, "error", 0, 0, str(e))
-                await asyncio.sleep(2)  # 关键词之间间隔，降低请求频率
+                await asyncio.sleep(KEYWORD_DELAY)  # 关键词之间间隔，降低请求频率
         except Exception as e:
             exc = e
             raise
@@ -371,8 +397,7 @@ class MonitorService:
         items = await monitor.search(
             keyword,
             max_price=max_price,       # 用于万元缩写量级判断
-            min_price=min_price,
-            must_include=must_include,
+            min_price=min_price,       # 用于万元缩写可疑字面价格判断
         )
         if not items:
             logger.warning(f"[{keyword}] 未获取到任何商品")
@@ -437,6 +462,7 @@ class MonitorService:
                     strict_unknown_credit=STRICT_UNKNOWN_CREDIT,
                     median_price=median_price,
                     scam_rules=SCAM_RULES,
+                    anomaly_ratio=PRICE_ANOMALY_RATIO,
                 )
                 # 警告标记（如价格异常/夸张话术）随商品入库，推送时展示
                 item["risk_flags"] = "；".join(verdict["warn"])
@@ -456,8 +482,10 @@ class MonitorService:
                     exclude_keywords=exclude_keywords,
                     must_include=must_include,
                     min_seller_credit=MIN_SELLER_CREDIT,
+                    strict_unknown_credit=STRICT_UNKNOWN_CREDIT,
                     median_price=median_price,
                     scam_rules=SCAM_RULES,
+                    anomaly_ratio=PRICE_ANOMALY_RATIO,
                 )
                 # 保留已记录的风险说明；若当前重新评估发现警告则追加。
                 old_flags = existing["risk_flags"] or ""
@@ -468,33 +496,26 @@ class MonitorService:
 
             result = self.db.upsert_item(item, keyword)
             if result["price_dropped"] and verdict["pass"]:
-                price_drop_notices.append(item) 
+                price_drop_notices.append(item)
             elif result["price_dropped"]:
                 logger.info(f"[{keyword}] 降价商品通过数据库更新，但因风险校验未通过而不推送: {item['item_id']}")
-            
-            # 新商品分支也需要保留 verdict，供降价判断结构保持一致。
 
         # 推送降价提醒
         for item in price_drop_notices:
             row = self.db.get_item(item["item_id"])
             if row:
-                # 查询降价记录获取原价
-                changes = self.db._query(
-                    "SELECT old_price FROM item_price_changes WHERE item_id=? ORDER BY id DESC LIMIT 1",
-                    (item["item_id"],),
-                )
-                old_price = changes[0]["old_price"] if changes else None
+                change = self.db.get_last_price_change(item["item_id"])
+                old_price = change["old_price"] if change else None
                 if old_price is not None:
                     await self._notify_drop(item, keyword, old_price)
 
         # 推送新匹配商品 — B4: 单轮>10条合并为摘要，避免 Bark/邮件 风暴
         notified_count = 0
-        if len(matches) > 10:
+        if len(matches) > BATCH_SUMMARY_THRESHOLD:
             # 全部标记已推送
             for it in matches:
                 self.db.mark_notified(it["item_id"])
-            from notifier import BarkNotifier as _BN
-            summary_title, summary_content = _BN.build_summary_payload(matches, keyword)
+            summary_title, summary_content = BarkNotifier.build_summary_payload(matches, keyword)
             # 复用统一发送（所有启用的渠道）；url 置空，摘要里提示看仪表盘
             ok_list = await asyncio.to_thread(self.notifier.send, summary_title, summary_content, "")
             ok = bool(ok_list)
@@ -579,13 +600,13 @@ def _iqr_trim(prices: list[float]) -> list[float]:
     样本过少（<5）时不做剔除，避免误删。
     """
     n = len(prices)
-    if n < 5:
+    if n < IQR_MIN_SAMPLES:
         return prices
     q1 = prices[n // 4]
     q3 = prices[3 * n // 4]
     iqr = q3 - q1
     if iqr <= 0:
         return prices
-    lo = q1 - 1.5 * iqr
-    hi = q3 + 1.5 * iqr
+    lo = q1 - IQR_MULTIPLIER * iqr
+    hi = q3 + IQR_MULTIPLIER * iqr
     return [p for p in prices if lo <= p <= hi]

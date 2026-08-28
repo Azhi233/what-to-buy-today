@@ -15,6 +15,7 @@ import logging
 import logging.handlers
 import hmac
 import os
+import re
 import sys
 import threading
 import time
@@ -32,12 +33,17 @@ if sys.platform == "win32":
 from flask import Flask, jsonify, render_template, request
 
 from config import DASHBOARD_TOKEN, MONITOR_SETTINGS
-from database import Database, parse_exclude_keywords
+from database import Database, resolve_db_path
 from monitor_service import MonitorService, build_monitor_settings, seed_products_from_config
 from notifier import BarkNotifier, NotifierManager
 
 _LOG_FMT = "%(asctime)s [%(levelname)s] %(message)s"
 _LOG_DATEFMT = "%Y-%m-%d %H:%M:%S"
+
+# ── 价格分布直方图参数（C5）──
+DIST_IQR_MULTIPLIER = 1.5       # IQR 离群值剔除系数，与 _iqr_trim 保持一致
+DIST_MIN_CORE_SAMPLES = 3       # 核心样本过少时退回全量价格，避免单桶失真
+DIST_BINS = 12                  # 直方图分桶数
 
 
 def _setup_logging(log_file: str = "dashboard.log"):
@@ -60,13 +66,20 @@ _setup_logging()
 logger = logging.getLogger("dashboard")
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DATA_DIR = os.path.abspath(os.path.join(BASE_DIR, MONITOR_SETTINGS.get("data_dir", "./data")))
-os.makedirs(DATA_DIR, exist_ok=True)
-DB_PATH = os.path.join(DATA_DIR, "monitor.db")
+DB_PATH = resolve_db_path(MONITOR_SETTINGS.get("data_dir", "./data"))
 LEGACY_DB_PATH = os.path.join(BASE_DIR, "monitor.db")
 if os.path.exists(LEGACY_DB_PATH) and not os.path.exists(DB_PATH):
-    import shutil
-    shutil.copy2(LEGACY_DB_PATH, DB_PATH)
+    try:
+        import sqlite3 as _sq
+        _src = _sq.connect(LEGACY_DB_PATH)
+        _dst = _sq.connect(DB_PATH)
+        _src.backup(_dst)
+        _dst.close()
+        _src.close()
+        os.remove(LEGACY_DB_PATH)
+        logger.info(f"已迁移旧数据库 monitor.db → {DB_PATH}")
+    except Exception as _e:
+        logger.warning(f"旧数据库迁移失败（忽略）: {_e}")
 db = Database(DB_PATH)
 db.seed_bark_from_config()
 notifier = NotifierManager(db)
@@ -82,14 +95,14 @@ def require_dashboard_token():
     if not request.path.startswith("/api/") or request.path == "/api/healthz":
         return None
     if not DASHBOARD_TOKEN:
+        if request.remote_addr not in {"127.0.0.1", "::1"}:
+            return jsonify({"ok": False, "error": "dashboard token is required for remote access"}), 401
         return None
     supplied = request.headers.get("X-Auth-Token", "")
     if not supplied:
         supplied = request.headers.get("Authorization", "")
         if supplied.lower().startswith("bearer "):
             supplied = supplied[7:].strip()
-    if not supplied:
-        supplied = request.args.get("token", "")
     if not hmac.compare_digest(supplied, DASHBOARD_TOKEN):
         return jsonify({"ok": False, "error": "unauthorized"}), 401
     return None
@@ -147,12 +160,16 @@ def api_healthz():
     except Exception:
         pass
     db_mb = None
+    db_ok = True
     try:
         db_mb = round(os.path.getsize(DB_PATH) / 1024 / 1024, 2) if os.path.exists(DB_PATH) else None
+        db._query("SELECT 1")
     except Exception:
-        pass
+        db_ok = False
+    healthy = db_ok and service.status in {"starting", "running", "checking"}
     return jsonify({
-        "ok": True,
+        "ok": healthy,
+        "db_ok": db_ok,
         "status": service.status,
         "uptime_seconds": int(time.time() - APP_STARTED_AT),
         "uptime_human": _ts(APP_STARTED_AT),
@@ -189,43 +206,44 @@ def api_products():
 
 @app.route("/api/products", methods=["POST"])
 def api_add_product():
-    data = request.get_json(force=True)
+    payload, err = _validate_price_pair(request.get_json(silent=True) or {}, require_keyword=True)
+    if err:
+        return jsonify(err[0]), err[1]
+    pid = db.add_product(payload["keyword"], payload["max_price"], payload["min_price"],
+                         payload["exclude_keywords"], 1, payload["must_include"])
+    return jsonify({"ok": True, "id": pid})
+
+
+def _validate_price_pair(data, require_keyword: bool):
+    """校验商品表单（POST/PUT 共用），返回 (payload, error_response)。"""
     keyword = (data.get("keyword") or "").strip()
-    if not keyword:
-        return jsonify({"ok": False, "error": "关键词不能为空"}), 400
+    if require_keyword and not keyword:
+        return None, ({"ok": False, "error": "关键词不能为空"}, 400)
     try:
         max_price = float(data.get("max_price", 0))
         min_price = float(data.get("min_price", 0))
     except (TypeError, ValueError):
-        return jsonify({"ok": False, "error": "价格格式错误"}), 400
+        return None, ({"ok": False, "error": "价格格式错误"}, 400)
     if max_price <= 0:
-        return jsonify({"ok": False, "error": "最高价格必须大于 0"}), 400
+        return None, ({"ok": False, "error": "最高价格必须大于 0"}, 400)
     if min_price < 0 or min_price > max_price:
-        return jsonify({"ok": False, "error": "最低价格必须在 0 到最高价格之间"}), 400
-    exclude = data.get("exclude_keywords", "") or ""
-    must_include = data.get("must_include", "") or ""
-    pid = db.add_product(keyword, max_price, min_price, exclude, 1, must_include)
-    return jsonify({"ok": True, "id": pid})
+        return None, ({"ok": False, "error": "最低价格必须在 0 到最高价格之间"}, 400)
+    return {
+        "keyword": keyword,
+        "max_price": max_price,
+        "min_price": min_price,
+        "exclude_keywords": data.get("exclude_keywords", "") or "",
+        "must_include": data.get("must_include", "") or "",
+    }, None
 
 
 @app.route("/api/products/<int:pid>", methods=["PUT"])
 def api_update_product(pid):
-    data = request.get_json(force=True)
-    keyword = (data.get("keyword") or "").strip()
-    if not keyword:
-        return jsonify({"ok": False, "error": "关键词不能为空"}), 400
-    try:
-        max_price = float(data.get("max_price", 0))
-        min_price = float(data.get("min_price", 0))
-    except (TypeError, ValueError):
-        return jsonify({"ok": False, "error": "价格格式错误"}), 400
-    if max_price <= 0:
-        return jsonify({"ok": False, "error": "最高价格必须大于 0"}), 400
-    if min_price < 0 or min_price > max_price:
-        return jsonify({"ok": False, "error": "最低价格必须在 0 到最高价格之间"}), 400
-    db.update_product(pid, keyword, max_price, min_price,
-                      data.get("exclude_keywords", "") or "",
-                      data.get("must_include", "") or "")
+    payload, err = _validate_price_pair(request.get_json(silent=True) or {}, require_keyword=True)
+    if err:
+        return jsonify(err[0]), err[1]
+    db.update_product(pid, payload["keyword"], payload["max_price"], payload["min_price"],
+                      payload["exclude_keywords"], payload["must_include"])
     return jsonify({"ok": True})
 
 
@@ -327,7 +345,7 @@ def api_get_settings():
 
 @app.route("/api/settings", methods=["POST"])
 def api_set_settings():
-    data = request.get_json(force=True)
+    data = request.get_json(silent=True) or {}
     if "interval_minutes" in data:
         try:
             val = max(5, int(data["interval_minutes"]))
@@ -341,7 +359,7 @@ def api_set_settings():
 
 @app.route("/api/control", methods=["POST"])
 def api_control():
-    action = (request.get_json(force=True) or {}).get("action", "")
+    action = (request.get_json(silent=True) or {}).get("action", "")
     if action == "start":
         service.start()
     elif action == "stop":
@@ -374,7 +392,8 @@ def api_export():
                          r["seller_credit"] or "", r["risk_flags"] or "",
                          1 if r["notified"] else 0, r["first_seen"], r["last_seen"]])
 
-    filename = f"xianyu_items_{keyword or 'all'}.csv"
+    safe_keyword = re.sub(r"[^0-9A-Za-z\u4e00-\u9fff_]+", "_", keyword or "all").strip("_")[:60] or "all"
+    filename = f"xianyu_items_{safe_keyword}.csv"
     return Response(
         "\ufeff" + output.getvalue(),  # BOM 让 Excel 正确识别 UTF-8
         mimetype="text/csv; charset=utf-8",
@@ -397,7 +416,7 @@ def api_bark_targets():
 
 @app.route("/api/bark-targets", methods=["POST"])
 def api_add_bark_target():
-    data = request.get_json(force=True) or {}
+    data = request.get_json(silent=True) or {}
     label = (data.get("label") or "").strip()
     server = (data.get("server") or "https://api.day.app").strip().rstrip("/") or "https://api.day.app"
     bark_key = (data.get("bark_key") or "").strip()
@@ -415,7 +434,7 @@ def api_update_bark_target(tid):
     row = db.get_bark_target(tid)
     if not row:
         return jsonify({"ok": False, "error": "未找到该推送目标"}), 404
-    data = request.get_json(force=True) or {}
+    data = request.get_json(silent=True) or {}
     label = (data.get("label") or "").strip()
     server = (data.get("server") or row["server"]).strip().rstrip("/") or "https://api.day.app"
     bark_key = (data.get("bark_key") or "").strip() or row["bark_key"]
@@ -457,7 +476,7 @@ def api_get_retention():
 
 @app.route("/api/retention", methods=["POST"])
 def api_set_retention():
-    data = request.get_json(force=True) or {}
+    data = request.get_json(silent=True) or {}
     try:
         updates = {}
         for k in ("items_days", "history_days", "checks_keep", "notifications_keep"):
@@ -485,8 +504,7 @@ def api_cleanup():
 
 @app.route("/api/clear-items", methods=["POST"])
 def api_clear_items():
-    db._execute("DELETE FROM items")
-    db._execute("DELETE FROM price_history")
+    db.clear_items()
     return jsonify({"ok": True})
 
 
@@ -518,7 +536,7 @@ def _item_json(row) -> dict:
     }
 
 
-def _calc_distribution(prices: list[float], bins: int = 12) -> list[dict]:
+def _calc_distribution(prices: list[float], bins: int = DIST_BINS) -> list[dict]:
     """
     计算价格分布（直方图数据）。
     使用更细的步长以展示中高价商品的细微差价：
@@ -538,10 +556,10 @@ def _calc_distribution(prices: list[float], bins: int = 12) -> list[dict]:
     q1 = prices[len(prices) // 4]
     q3 = prices[3 * len(prices) // 4]
     iqr = q3 - q1
-    core_low = max(low, q1 - 1.5 * iqr)
-    core_high = min(high, q3 + 1.5 * iqr)
+    core_low = max(low, q1 - DIST_IQR_MULTIPLIER * iqr)
+    core_high = min(high, q3 + DIST_IQR_MULTIPLIER * iqr)
     core = [p for p in prices if core_low <= p <= core_high]
-    if len(core) < 3:  # 数据太少就退回全量
+    if len(core) < DIST_MIN_CORE_SAMPLES:  # 数据太少就退回全量
         core = prices
     if not core:
         core = prices
@@ -582,10 +600,7 @@ def _calc_trend(db: Database, keyword: str, limit: int = 100) -> list[dict]:
     if keyword:
         rows = db.get_price_history(keyword, limit=limit)
     else:
-        # 全部关键词：按 epoch 聚合（兼容旧数据）
-        rows = db._query(
-            "SELECT * FROM price_history ORDER BY COALESCE(NULLIF(epoch,0), id) DESC LIMIT ?", (limit,)
-        )
+        rows = db.get_all_price_history(limit=limit)
     points = []
     for r in reversed(rows):
         points.append({
@@ -661,7 +676,10 @@ def _check_single_instance() -> bool:
 
 def main():
     parser = argparse.ArgumentParser(description="闲鱼监控仪表盘")
-    parser.add_argument("--port", type=int, default=5000)
+    # F-07: host/port 支持环境变量覆盖（HOST/PORT），命令行参数优先
+    parser.add_argument("--port", type=int, default=int(os.environ.get("PORT", 5000)))
+    parser.add_argument("--host", default=os.environ.get("HOST", "127.0.0.1"),
+                        help="监听地址，容器部署用 0.0.0.0")
     parser.add_argument("--no-browser", action="store_true", help="不自动打开浏览器")
     args = parser.parse_args()
 
@@ -690,11 +708,11 @@ def main():
         threading.Timer(1.2, lambda: webbrowser.open(url)).start()
 
     try:
-        app.run(host="127.0.0.1", port=args.port, debug=False, use_reloader=False)
+        app.run(host=args.host, port=args.port, debug=False, use_reloader=False)
     except KeyboardInterrupt:
         print("\n正在停止监控服务...")
     finally:
-        service.stop()
+        service.stop(timeout=10)
         db.close()
         _remove_pid()
 

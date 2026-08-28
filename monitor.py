@@ -33,6 +33,19 @@ logger = logging.getLogger(__name__)
 # 常见 UA 池，随机选择，模拟不同用户
 PRO_MODEL_WORDS = {"pro", "max", "plus", "mini", "ultra", "promax", "pro max"}
 
+# ── 万元缩写判定阈值（C5，见 R4/E6 修复）──
+WAN_UNIT = 10000                        # 万元换算倍率（"X.YY 万" = X.YY × 10000）
+WAN_INT_RANGE = (1, 10)                 # 万元缩写整数部分范围：1 ≤ number < 10
+WAN_CANDIDATE_MAX_MULTIPLIER = 3.0      # 万元候选值上限倍数：wan×10000 ≤ max_price×3
+WAN_SAME_ORDER_RATIO = 0.9              # 万元候选须与监控上限同量级（≤90%×max_price）
+WAN_SUSPICIOUS_LITERAL_RATIO = 0.1      # 字面价低于 min_price 的该比例时视为可疑低价
+
+# ── 页面操作超时（毫秒 / 秒）──
+PAGE_NAV_TIMEOUT_MS = 30000             # 登录页/首页导航超时
+API_REQUEST_TIMEOUT_MS = 20000          # mtop 登录检测请求超时
+SEARCH_SELECTOR_TIMEOUT_MS = 20000      # 搜索页商品链接等待超时
+PAGE_CLOSE_TIMEOUT_S = 5                # page.close 兜底超时，避免句柄泄漏（H-03）
+
 USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
@@ -44,11 +57,8 @@ USER_AGENTS = [
 # 商品详情页 URL 模式
 ITEM_URL_PATTERN = re.compile(r"/item\?id=(\d+)")
 
-# 搜索 API 名称（用于拦截响应，获取结构化数据）
-SEARCH_API_NAMES = [
-    "idlemtopsearch.pc.search",
-    "idlemtopsearch.pc.item.search",
-]
+# mtop 接口 AppKey（协议常量，登录检测签名与请求共用）
+MTOP_APP_KEY = "34839810"
 
 # ═══════════════════════════════════════════
 #  卖家信用等级（从高到低）
@@ -116,14 +126,19 @@ def parse_price_extended(text: str, price_num: str = "", price_dec: str = "",
         # 万元缩写只能在有量级证据时启用：显式“万”或标题/监控上限支持万元级。
         # 仅凭 number+decimal 无法区分 3.5 元配件和 3.5 万元设备，默认按字面价格。
         explicit_wan = "万" in (text or "") or "万" in (title or "")
-        plausible_wan = max_price > 0 and wan * 10000 <= max_price * 3
+        plausible_wan = max_price > 0 and wan * WAN_UNIT <= max_price * WAN_CANDIDATE_MAX_MULTIPLIER
         # 没有单位时，万元候选值还必须与监控上限处于同一数量级。
-        if not explicit_wan and max_price > 0 and wan * 10000 > max_price * 0.9:
+        if not explicit_wan and max_price > 0 and wan * WAN_UNIT > max_price * WAN_SAME_ORDER_RATIO:
             plausible_wan = False
-        # 显式万元单位优先；若没有单位，仅在监控量级合理时换算。
-        suspicious_literal = min_price > 0 and wan < min_price * 0.1
-        if wan_scale and 1 <= num_val < 10 and (explicit_wan or plausible_wan or suspicious_literal):
-            return wan * 10000, True
+        # 字面价可疑低：仅当"万元解释"远高于监控上限（>3×max）时才按万元，
+        # 避免高 min_price 监控下低价配件被误放大（如 3.5 元 → 35000）。
+        suspicious_literal = (
+            min_price > 0 and wan < min_price * WAN_SUSPICIOUS_LITERAL_RATIO
+            and wan * WAN_UNIT > max_price * WAN_CANDIDATE_MAX_MULTIPLIER
+        )
+        lo, hi = WAN_INT_RANGE
+        if wan_scale and lo <= num_val < hi and (explicit_wan or plausible_wan or suspicious_literal):
+            return wan * WAN_UNIT, True
         return wan, False
 
     # 回退：直接用 parse_price
@@ -141,7 +156,7 @@ def _is_browser_error(exc: Exception) -> bool:
     )
 
 
-def compute_mtop_sign(token: str, t: str, app_key: str = "34839810", data: str = "") -> str:
+def compute_mtop_sign(token: str, t: str, app_key: str = MTOP_APP_KEY, data: str = "") -> str:
     """
     计算淘宝 mtop 接口签名。
     算法: md5(token + '&' + t + '&' + appKey + '&' + data)
@@ -159,7 +174,6 @@ class GoofishMonitor:
         self._playwright = None
         self._context: Optional[BrowserContext] = None
         self._api_items: list[dict] = []
-        self._search_api_data: list[dict] = []
 
     # ─────────────────────────────────────────
     #  浏览器生命周期
@@ -211,7 +225,6 @@ class GoofishMonitor:
     async def _new_page(self) -> Page:
         """创建页面并挂载 API 响应监听。"""
         self._api_items = []
-        self._search_api_data = []
         page = await self._context.new_page()
         page.on("response", self._on_response)
         return page
@@ -226,13 +239,10 @@ class GoofishMonitor:
             if "json" not in content_type:
                 return
             data = await response.json()
-            # 记录搜索结果
-            for api_name in SEARCH_API_NAMES:
-                if api_name in url:
-                    self._search_api_data.append(data)
             self._extract_from_json(data)
-        except Exception:
-            pass
+        except Exception as e:
+            # 单条响应解析失败不中断监控，仅记录以便排查页面结构变化
+            logger.debug(f"搜索响应解析失败: {e}")
 
     def _extract_from_json(self, data):
         """从 JSON 数据中递归提取商品信息。"""
@@ -319,7 +329,7 @@ class GoofishMonitor:
                 own_page = True
 
         try:
-            await page.goto("https://www.goofish.com/", wait_until="domcontentloaded", timeout=30000)
+            await page.goto("https://www.goofish.com/", wait_until="domcontentloaded", timeout=PAGE_NAV_TIMEOUT_MS)
             await self._human_delay(2, 4)
             login_links = await page.eval_on_selector_all(
                 "a[href*='/login']", "els => els.length"
@@ -363,7 +373,7 @@ class GoofishMonitor:
             sign = compute_mtop_sign(token, t)
             url = (
                 "https://h5api.m.goofish.com/h5/mtop.taobao.idlemessage.pc.loginuser.get/1.0/"
-                f"?jsv=2.7.2&appKey=34839810&t={t}&sign={sign}&v=1.0&type=originaljson"
+                f"?jsv=2.7.2&appKey={MTOP_APP_KEY}&t={t}&sign={sign}&v=1.0&type=originaljson"
                 "&accountSite=xianyu&dataType=json&timeout=20000"
                 "&api=mtop.taobao.idlemessage.pc.loginuser.get&sessionOption=AutoLoginOnly"
             )
@@ -384,7 +394,7 @@ class GoofishMonitor:
         """
         page = await self._new_page()
         try:
-            await page.goto("https://www.goofish.com/", wait_until="domcontentloaded", timeout=30000)
+            await page.goto("https://www.goofish.com/", wait_until="domcontentloaded", timeout=PAGE_NAV_TIMEOUT_MS)
             # 等页面脚本加载完成，避免误判
             await self._human_delay(3, 5)
             logger.info("=" * 55)
@@ -443,7 +453,7 @@ class GoofishMonitor:
         return base
 
     async def _extract_from_dom(self, page: Page, wan_scale: bool = False,
-                                max_price: float = 0) -> list[dict]:
+                                max_price: float = 0, min_price: float = 0) -> list[dict]:
         """
         从渲染后的 DOM 中提取商品信息。
         基于闲鱼搜索卡片的标准结构：
@@ -512,7 +522,7 @@ class GoofishMonitor:
         return items
 
     async def search(self, keyword: str, max_price: float = 0,
-                     min_price: float = 0, must_include: list[str] = None) -> list[dict]:
+                     min_price: float = 0) -> list[dict]:
         """
         搜索指定关键词，返回商品列表。
         过滤掉与关键词无关的推荐商品。
@@ -529,7 +539,7 @@ class GoofishMonitor:
             try:
                 await page.wait_for_selector(
                     "a[href*='/item?id=']",
-                    timeout=20000,
+                    timeout=SEARCH_SELECTOR_TIMEOUT_MS,
                 )
             except PlaywrightTimeoutError:
                 logger.warning(f"搜索 {keyword} 未找到商品链接（可能未登录或没有结果）")
@@ -541,7 +551,9 @@ class GoofishMonitor:
             await self._scroll_and_collect(page)
 
             # DOM 解析（主要）；万元判定由显式“万”或 max_price 量级共同确认
-            dom_items = await self._extract_from_dom(page, wan_scale=True, max_price=max_price)
+            dom_items = await self._extract_from_dom(
+                page, wan_scale=True, max_price=max_price, min_price=min_price,
+            )
 
             # 合并 API 数据（补充字段）
             all_items = self._merge_items(dom_items)
@@ -563,7 +575,7 @@ class GoofishMonitor:
         finally:
             # B2: page.close 超时兜底，避免异常路径泄漏页面句柄
             try:
-                await asyncio.wait_for(page.close(), timeout=5)
+                await asyncio.wait_for(page.close(), timeout=PAGE_CLOSE_TIMEOUT_S)
             except Exception:
                 try:
                     # 兜底：若 close 超时/失败，尝试强制关闭上下文页面列表
@@ -640,28 +652,6 @@ def matches_keyword(title: str, keyword: str) -> bool:
             return len(matched) >= 2
     # 无主词 → 需至少 2 个词元
     return len(matched) >= 2
-
-
-def filter_items(
-    items: list[dict],
-    max_price: float,
-    min_price: float,
-    exclude_keywords: list[str],
-) -> list[dict]:
-    """
-    过滤商品：价格在 [min_price, max_price] 区间内，
-    且标题不包含排除关键词。
-    """
-    results = []
-    for item in items:
-        price = item.get("price", 0)
-        title = item.get("title", "")
-        if price < min_price or price > max_price:
-            continue
-        if any(kw in title for kw in exclude_keywords):
-            continue
-        results.append(item)
-    return results
 
 
 # ═══════════════════════════════════════════

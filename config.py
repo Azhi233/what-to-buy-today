@@ -1,18 +1,63 @@
 """
 ============================================
-  闲鱼价格监控 - 配置文件
+  闲鱼价格监控 - 配置（可提交的占位模板）
 ============================================
 使用说明：
   1. 修改 MONITOR_ITEMS 添加你要监控的商品
   2. 根据需要开启推送渠道（Bark / PushPlus / 邮件 / Telegram）
   3. 首次运行 python run.py --login 扫码登录闲鱼（只需一次）
-  4. 运行 python run.py 即可启动监控
+  4. 运行 python app.py 即可启动监控 + 仪表盘
+
+⚠️ 密钥边界：本文件被 Git 追踪，但仅含占位默认值，不含真实密钥。
+   真实密钥请通过环境变量（或 .env）注入，勿在本文件填写真实密钥后提交。
+   容器/服务部署推荐用环境变量（见 .env.example）。
 ============================================
 """
 
 import os
+import sys
 
-DASHBOARD_TOKEN = os.environ.get("DASHBOARD_TOKEN", "").strip()
+
+def _env(name: str, default: str = "") -> str:
+    """读取并清理环境变量；未设置时回退到本地文件值。"""
+    return os.environ.get(name, default).strip()
+
+
+_TRUTHY = {"1", "true", "yes", "on"}
+_FALSY = {"0", "false", "no", "off"}
+
+
+def _warn_invalid(name: str, value: str, expected: str) -> None:
+    """环境变量非法时告警，便于部署时发现配置错误。"""
+    print(f"[config] 环境变量 {name}={value!r} 无法识别（期望 {expected}），已回退到默认值", file=sys.stderr)
+
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    value = _env(name)
+    if not value:
+        return default
+    lowered = value.lower()
+    if lowered in _TRUTHY:
+        return True
+    if lowered in _FALSY:
+        return False
+    _warn_invalid(name, value, "1/0/true/false/yes/no/on/off")
+    return default
+
+
+def _env_int(name: str, default: int) -> int:
+    value = _env(name)
+    if not value:
+        return default
+    try:
+        return int(value)
+    except ValueError:
+        _warn_invalid(name, value, "整数")
+        return default
+
+
+# 仪表盘 API 鉴权 Token（环境变量 DASHBOARD_TOKEN；空 = 不启用鉴权，仅建议本机使用）
+DASHBOARD_TOKEN = _env("DASHBOARD_TOKEN")
 
 # ═══════════════════════════════════════════
 #  监控商品列表 - 在这里添加你想监控的商品
@@ -130,65 +175,71 @@ PRICE_ANOMALY_RATIO = 0.5
 
 # ═══════════════════════════════════════════
 #  推送通知配置（选择一个或多个开启即可）
+#  每项均支持环境变量覆盖：BARK_ENABLED / BARK_KEY / BARK_SERVER、
+#  PUSHPLUS_ENABLED / PUSHPLUS_TOKEN、SMTP_ENABLED / SMTP_HOST / SMTP_PORT /
+#  SMTP_USER / SMTP_PASSWORD / SMTP_TO、TELEGRAM_ENABLED / TELEGRAM_BOT_TOKEN /
+#  TELEGRAM_CHAT_ID
+#  注意：enabled=True 且密钥为占位符时该渠道不会真正启用，请填入真实密钥。
 # ═══════════════════════════════════════════
 
 # --- Bark（iOS 推送，推荐） ---
 # 在 App Store 下载 Bark，复制给你的 Key
-# 格式：https://api.day.app/你的Key/标题/内容
-# ⚠️ 请替换为你自己的 Bark Key，示例："abc123def456..."
 BARK_CONFIG = {
-    "enabled": True,
-    "key": "your_bark_key_here",
+    "enabled": _env_bool("BARK_ENABLED", False),
+    "server": _env("BARK_SERVER", "https://api.day.app"),
+    "key": _env("BARK_KEY", "your_bark_key_here"),
 }
 
 # --- PushPlus（微信推送） ---
 # 在 http://www.pushplus.plus 获取 Token
 PUSHPLUS_CONFIG = {
-    "enabled": False,
-    "token": "your_pushplus_token_here",
+    "enabled": _env_bool("PUSHPLUS_ENABLED", False),
+    "token": _env("PUSHPLUS_TOKEN", "your_pushplus_token_here"),
 }
 
 # --- SMTP 邮件推送 ---
 # 支持 QQ邮箱 / Gmail / 163 等
 SMTP_CONFIG = {
-    "enabled": False,
-    "host": "smtp.qq.com",          # SMTP 服务器
-    "port": 465,                     # SSL 端口
-    "user": "your_email@qq.com",     # 邮箱地址
-    "password": "your_smtp_code",    # SMTP 授权码（非邮箱密码）
-    "to": "your_email@qq.com",       # 接收通知的邮箱
+    "enabled": _env_bool("SMTP_ENABLED", False),
+    "host": _env("SMTP_HOST", "smtp.qq.com"),       # SMTP 服务器
+    "port": _env_int("SMTP_PORT", 465),             # SSL 端口
+    "user": _env("SMTP_USER", "your_email@qq.com"), # 邮箱地址
+    "password": _env("SMTP_PASSWORD", "your_smtp_code"),  # SMTP 授权码（非邮箱密码）
+    "to": _env("SMTP_TO", "your_email@qq.com"),     # 接收通知的邮箱
 }
 
 # --- Telegram Bot 推送 ---
-# 在 Telegram 中搜索 @BotFather 创建 Bot，获取 Token
-# 搜索你的 Bot 并发送 /start，然后访问 https://api.telegram.org/bot<YourToken>/getUpdates 获取 chat_id
+# 在 Telegram 中搜索 @BotFather 创建 Bot 获取 Token；
+# 发送 /start 后访问 https://api.telegram.org/bot<YourToken>/getUpdates 获取 chat_id
 TELEGRAM_CONFIG = {
-    "enabled": False,
-    "bot_token": "your_bot_token_here",
-    "chat_id": "your_chat_id_here",
+    "enabled": _env_bool("TELEGRAM_ENABLED", False),
+    "bot_token": _env("TELEGRAM_BOT_TOKEN", "your_bot_token_here"),
+    "chat_id": _env("TELEGRAM_CHAT_ID", "your_chat_id_here"),
 }
 
 # ═══════════════════════════════════════════
 #  监控运行设置
+#  环境变量覆盖：MONITOR_INTERVAL_MINUTES / MONITOR_HEADLESS /
+#  MONITOR_BROWSER_PROFILE / MONITOR_DATA_DIR / MONITOR_MAX_ITEMS
 # ═══════════════════════════════════════════
 MONITOR_SETTINGS = {
     # 每轮监控的间隔时间（分钟）—— 建议 30 分钟以上
     # 太频繁容易被闲鱼风控识别为机器人
-    "interval_minutes": 30,
+    "interval_minutes": _env_int("MONITOR_INTERVAL_MINUTES", 30),
 
     # 浏览器模式（重要！）
     # 闲鱼风控会拦截无头浏览器（headless=True 时容易触发"非法访问"）
     # 强烈建议保持 False（有头模式，浏览器窗口可以最小化）
     # 如果想尝试无头模式，先登录后再改，但有一定风险
-    "headless": False,
+    "headless": _env_bool("MONITOR_HEADLESS", False),
 
     # 浏览器配置目录（保存登录状态）
     # 首次运行 python run.py --login 扫码登录后，登录态保存在这里
-    "user_data_dir": "./browser_profile",
+    "user_data_dir": _env("MONITOR_BROWSER_PROFILE", "./browser_profile"),
 
     # 数据存储目录（已发现的商品会记录在这里，避免重复推送）
-    "data_dir": "./data",
+    "data_dir": _env("MONITOR_DATA_DIR", "./data"),
 
     # 每页监控的商品数量上限
-    "max_items_per_page": 60,
+    "max_items_per_page": _env_int("MONITOR_MAX_ITEMS", 60),
 }

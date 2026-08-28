@@ -1,18 +1,18 @@
 """
-闲鱼价格监控 - 主入口
+闲鱼价格监控 - 运维入口（薄壳）
 ================================
-用法：
-  python run.py --login     # 首次使用：扫码登录闲鱼（只需一次）
-  python run.py             # 正常运行监控
-  python run.py --once      # 只检查一轮后退出（调试用）
+常驻监控请使用 `python app.py`（唯一常驻入口，含仪表盘）。
+本命令仅用于运维操作：
+  python run.py --login     # 扫码登录闲鱼（首次使用，只需一次）
+  python run.py --once      # 只检查一轮后退出（调试/验证用）
   python run.py --stats     # 查看历史统计信息
+  python run.py --check     # 配置与依赖检查
 ================================
 """
 
 import argparse
 import asyncio
 import logging
-import os
 import sys
 
 if sys.platform == "win32":
@@ -23,7 +23,7 @@ if sys.platform == "win32":
         pass
 
 from config import MONITOR_ITEMS, MONITOR_SETTINGS
-from database import Database
+from database import Database, resolve_db_path
 from monitor import GoofishMonitor
 from monitor_service import MonitorService
 from notifier import NotifierManager
@@ -50,7 +50,7 @@ logger = logging.getLogger("run")
 
 
 def validate_config() -> bool:
-    """检查配置是否有效。"""
+    """检查配置是否有效（关键词、max_price>0、min≤max）。"""
     if not MONITOR_ITEMS:
         logger.error("config.py 中 MONITOR_ITEMS 为空，请先添加要监控的商品！")
         return False
@@ -60,6 +60,20 @@ def validate_config() -> bool:
             return False
         if not item.get("max_price"):
             logger.error(f"MONITOR_ITEMS[{i}] ({item['keyword']}) 缺少 max_price 字段！")
+            return False
+        try:
+            max_price = float(item["max_price"])
+            min_price = float(item.get("min_price") or 0)
+        except (TypeError, ValueError):
+            logger.error(f"MONITOR_ITEMS[{i}] ({item['keyword']}) 的价格字段必须是数字！")
+            return False
+        if max_price <= 0:
+            logger.error(f"MONITOR_ITEMS[{i}] ({item['keyword']}) 的 max_price 必须大于 0！")
+            return False
+        if min_price < 0 or min_price > max_price:
+            logger.error(
+                f"MONITOR_ITEMS[{i}] ({item['keyword']}) 的 min_price({min_price}) 必须不小于 0 且不大于 max_price({max_price})！"
+            )
             return False
     return True
 
@@ -71,7 +85,7 @@ async def cmd_login(monitor):
     ok = await monitor.wait_for_login(timeout_minutes=10)
     await monitor.stop()
     if ok:
-        print("\n✅ 登录成功！现在可以运行 python run.py 开始监控了。")
+        print("\n✅ 登录成功！现在可以运行 python app.py 开始监控了。")
     else:
         print("\n⚠️ 登录超时，请重新运行 python run.py --login")
 
@@ -81,9 +95,31 @@ async def main():
     parser.add_argument("--login", action="store_true", help="扫码登录闲鱼（首次使用）")
     parser.add_argument("--once", action="store_true", help="只检查一轮后退出")
     parser.add_argument("--stats", action="store_true", help="显示 SQLite 历史统计信息")
+    parser.add_argument("--check", action="store_true", help="执行一次配置与依赖检查后退出")
     args = parser.parse_args()
 
-    db_path = os.path.join(MONITOR_SETTINGS.get("data_dir", "./data"), "monitor.db")
+    # P-02/K-02 单一入口：run.py 仅作运维薄壳，无参数时不再启动常驻监控，
+    # 避免与 python app.py 同时常驻导致重复检查/重复推送。
+    if not (args.login or args.once or args.stats or args.check):
+        parser.print_help()
+        print("\n常驻监控请使用 python app.py（唯一常驻入口，含仪表盘）。")
+        return
+
+    db_path = resolve_db_path(MONITOR_SETTINGS.get("data_dir", "./data"))
+
+    if args.check:
+        if not validate_config():
+            sys.exit(1)
+        db = Database(db_path)
+        try:
+            stats = db.get_stats()
+            print("配置检查通过")
+            print(f"数据库: {db_path}")
+            print(f"监控商品: {stats['monitored_products']}")
+            print(f"Bark 目标: {len(db.get_bark_targets())}")
+        finally:
+            db.close()
+        return
 
     if args.stats:
         db = Database(db_path)
@@ -113,19 +149,13 @@ async def main():
     service = MonitorService(db, notifier)
     service.start()
     try:
-        if args.once:
-            while service.last_check_at is None and service._thread and service._thread.is_alive():
-                await asyncio.sleep(0.2)
-            service.stop()
-            if service._thread:
-                service._thread.join(timeout=10)
-        else:
-            while service._thread and service._thread.is_alive():
-                await asyncio.sleep(1)
+        # --once：等待首轮完成（last_check_at 非空）后停止
+        while service.last_check_at is None and service._thread and service._thread.is_alive():
+            await asyncio.sleep(0.2)
     except KeyboardInterrupt:
         logger.info("收到停止信号，正在退出...")
     finally:
-        service.stop()
+        service.stop(timeout=10)
         db.close()
 
 
