@@ -33,6 +33,9 @@
 - 新增 `start.bat`：Windows 用户双击一键构建并启动容器（需 Docker Desktop）
 - Dockerfile 改为 root 进入 + 降权，兼容宿主卷挂载无需手动 chown
 - compose 移除强制 `MONITOR_HEADLESS=1`，改由 entrypoint 默认有头
+- 修复容器内 chromium 崩溃：降权后正确设置 `HOME`（crashpad 数据库路径依赖 HOME）
+- 修复 `_ensure_browser` 误判浏览器失效：`BrowserContext` 无 `is_closed()`，改用 `pages` 属性探测连接
+- 修复 `_is_browser_error` 不识别 `BrowserDeadError`，浏览器失效时无法触发重启
 
 ## [1.0.0] - 2026-08-28
 
