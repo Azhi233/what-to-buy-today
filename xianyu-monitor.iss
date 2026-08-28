@@ -23,6 +23,8 @@ AppVersion={#MyAppVersion}
 AppPublisher={#MyAppPublisher}
 AppPublisherURL={#MyAppURL}
 DefaultDirName={localappdata}\Programs\XianYuMonitor
+; 安装界面提供目录选择页（用户可自由选择安装位置）
+DisableDirPage=no
 DefaultGroupName={#MyAppName}
 OutputDir=Output
 OutputBaseFilename=XianYuMonitor-Setup-{#MyAppVersion}

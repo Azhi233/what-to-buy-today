@@ -147,7 +147,9 @@ async def main():
         sys.exit(1)
 
     if args.login:
-        await cmd_login(GoofishMonitor(MONITOR_SETTINGS))
+        settings = dict(MONITOR_SETTINGS)
+        settings["hide_browser_window"] = False  # 登录必须显示窗口供扫码
+        await cmd_login(GoofishMonitor(settings))
         return
 
     db = Database(db_path)

@@ -190,7 +190,21 @@ class GoofishMonitor:
         self._playwright = await async_playwright().start()
 
         headless = self.settings.get("headless", False)
+        hide_window = bool(self.settings.get("hide_browser_window")) and not headless
         # 注意：无头模式容易被闲鱼风控拦截，默认使用有头模式
+        browser_args = [
+            "--disable-blink-features=AutomationControlled",
+            "--no-sandbox",
+            # 容器/无显示环境稳定性：--no-zygote 避开 crashpad 在容器的初始化崩溃；
+            # 其余为容器最小资源占用与显卡无头环境所需
+            "--no-zygote",
+            "--disable-crash-reporter",
+            "--disable-dev-shm-usage",
+            "--disable-gpu",
+        ]
+        if hide_window:
+            # 后台抓取：把窗口移到屏幕外（保持有头模式规避风控，但用户不可见）
+            browser_args.append("--window-position=-32000,-32000")
         self._context = await self._playwright.chromium.launch_persistent_context(
             self.user_data_dir,
             headless=headless,
@@ -201,16 +215,7 @@ class GoofishMonitor:
             },
             locale="zh-CN",
             timezone_id="Asia/Shanghai",
-            args=[
-                "--disable-blink-features=AutomationControlled",
-                "--no-sandbox",
-                # 容器/无显示环境稳定性：--no-zygote 避开 crashpad 在容器的初始化崩溃；
-                # 其余为容器最小资源占用与显卡无头环境所需
-                "--no-zygote",
-                "--disable-crash-reporter",
-                "--disable-dev-shm-usage",
-                "--disable-gpu",
-            ],
+            args=browser_args,
         )
         # 清除自动化标记，降低被识别为爬虫的风险
         await self._context.add_init_script("""

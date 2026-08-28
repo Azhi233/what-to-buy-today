@@ -241,6 +241,10 @@ MONITOR_SETTINGS = {
     # 首次运行 python run.py --login 扫码登录后，登录态保存在这里
     "user_data_dir": _env("MONITOR_BROWSER_PROFILE", os.path.join(BASE_DIR, "browser_profile")),
 
+    # 后台抓取：保持有头模式（规避闲鱼风控），但把浏览器窗口移出屏幕，
+    # 抓取时用户无感知。扫码登录（run.py --login）会强制显示窗口。
+    "hide_browser_window": _env_bool("MONITOR_HIDE_WINDOW", True),
+
     # 数据存储目录（已发现的商品会记录在这里，避免重复推送）
     "data_dir": _env("MONITOR_DATA_DIR", os.path.join(BASE_DIR, "data")),
 
