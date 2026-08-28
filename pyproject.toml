@@ -1,0 +1,18 @@
+[tool.pytest.ini_options]
+addopts = "-q"
+testpaths = ["tests"]
+# 让 `pytest`（Makefile/CI 用的命令）与 `python -m pytest` 行为一致：
+# 把项目根目录加入 sys.path，测试模块才能 `import app` / `import database`。
+pythonpath = ["."]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+exclude = ["static/echarts.min.js"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W"]
+ignore = ["E501"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["E402"]

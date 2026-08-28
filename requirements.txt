@@ -1,4 +1,7 @@
-playwright>=1.40.0
-requests>=2.31.0
-apscheduler>=3.10.0
-flask>=3.0.0
+# Runtime dependencies
+playwright==1.44.0
+requests>=2.31,<3
+flask>=3.0,<4
+
+# Optional: enables RSS memory reporting in /api/healthz
+psutil>=5.9,<7

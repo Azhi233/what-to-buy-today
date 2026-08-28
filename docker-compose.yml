@@ -7,9 +7,22 @@ services:
       - ./browser_profile:/app/browser_profile
       - ./data:/app/data
     restart: unless-stopped
+    # Secrets/config via environment. For local dev, edit config.py (placeholder is tracked).
+    # For containers, prefer env vars / .env file over baking secrets into the image.
+    # REQUIRED: set DASHBOARD_TOKEN for any remote access. When unset, all /api/* (except
+    # /api/healthz) are rejected for non-localhost clients — the dashboard UI will not load data.
+    # Example .env (optional):
+    #   DASHBOARD_TOKEN=your-token
+    #   BARK_ENABLED=1
+    #   BARK_KEY=your-bark-key
+    #   BARK_SERVER=https://api.day.app
+    env_file:
+      - path: .env
+        required: false
     environment:
       - TZ=Asia/Shanghai
-    # 健康检查：仪表盘探针
+      # 容器无显示环境，必须 headless 运行（如需有头模式请在镜像内加 Xvfb 并改回 0）
+      - MONITOR_HEADLESS=1
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5000/api/healthz', timeout=5)"]
       interval: 60s
