@@ -24,6 +24,7 @@ python run.py --login
 ## Docker Compose
 
 ```bash
+# Windows 最终用户：直接双击 start.bat 即可一键构建并启动（需已装 Docker Desktop）
 git clone https://github.com/Azhi233/what-to-buy-today.git
 cd what-to-buy-today
 cp .env.example .env
@@ -36,12 +37,9 @@ curl http://127.0.0.1:5000/api/healthz | python -m json.tool
 
 compose 持久化 `./data:/app/data` 与 `./browser_profile:/app/browser_profile`，不绑定单个 SQLite 文件；这样数据库、WAL 和共享内存文件始终同步。配置通过 `.env` 注入。
 
-> **权限要求（S-08 非 root）**：镜像内以 `pwuser`（UID 1000）运行。首次部署前请确保宿主机挂载目录对该用户可写：
-> ```bash
-> sudo mkdir -p data browser_profile
-> sudo chown -R 1000:1000 data browser_profile
-> ```
-> 否则容器内无法写入数据库/登录态，健康探针将转为 unhealthy。
+> **有头模式（规避闲鱼无头拦截）**：容器内通过 `Xvfb` 虚拟显示器提供有头浏览器环境，`MONITOR_HEADLESS` 默认 `0`（有头）。请不要把该变量设为 `1`——闲鱼风控会拦截无头浏览器。日志中会出现 `虚拟显示器 DISPLAY=:99 已启动`，代表有头浏览器已就绪。
+
+> **权限（S-08 非 root，自动处理）**：镜像内以 `pwuser`（UID 1000）运行，`entrypoint.sh` 会以 root 自动修正 `data/`、`browser_profile/` 的宿主卷属主后降权，首次部署**无需手动 `chown`**。仅当宿主机目录本身不可写时才需手动设置。
 
 > **安全要求**：容器/远程部署**必须设置 `DASHBOARD_TOKEN`**。未设置时，除 `/api/healthz` 外的所有 API 都会对非 localhost 客户端返回 401，仪表盘将无法加载数据。`.env` 缺失时 compose 会跳过（`required: false`），请用 `.env.example` 创建并填写 Token。
 
@@ -52,7 +50,7 @@ git pull
 docker compose up -d --build
 ```
 
-容器默认以 `python app.py --no-browser --port 5000` 启动，监听容器内 `5000`，宿主机映射为 `5000`。
+容器入口 `entrypoint.sh` 会修正属主、启动 Xvfb 虚拟显示，再以 `python app.py --no-browser --port 5000`（默认 `0.0.0.0:5000`，可用 `HOST`/`PORT` 环境变量覆盖）启动。
 
 ## systemd（Ubuntu/Debian）
 

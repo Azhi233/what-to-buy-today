@@ -23,9 +23,20 @@
 
 两者共用同一套 SQLite 数据与浏览器登录态（`data/`、`browser_profile/`），**不要同时常驻两个入口**（`app.py` 已有单实例保护）。
 
-## 快速开始
+## 快速开始（最终用户：Docker 一键启动）
+
+> 如果你不想手动安装 Python / Playwright，这是开箱即用的方式。
+
+1. 安装 [Docker Desktop](https://www.docker.com/products/docker-desktop/)（Windows/macOS 各装一次）。
+2. 双击项目根目录的 **`start.bat`**，脚本会自动构建镜像并启动，然后打开 `http://127.0.0.1:5000` 查看仪表盘。
+3. 首次使用需完成闲鱼登录：在宿主机 `python run.py --login` 扫码，或把已登录的 `browser_profile/` 放到项目目录（见 `deploy/README.md`）。
+4. 容器内用 Xvfb 虚拟显示运行**有头浏览器**，规避闲鱼对无头浏览器的拦截；数据与登录态持久化在 `data/`、`browser_profile/`，升级镜像不丢。
+
+以下章节为**本地开发 / 源码部署**的完整步骤。
 
 ### 1. 安装依赖
+
+> 💡 **最终用户（Docker 一键启动）**：无需手动安装 Python / Playwright，`Dockerfile` 已内置全部依赖。仅需安装 [Docker Desktop](https://www.docker.com/products/docker-desktop/) 后双击 `start.bat` 一键启动。以下安装步骤仅供**本地开发**使用。
 
 ```bash
 pip install -r requirements.txt
@@ -145,6 +156,10 @@ buy/
 ├── monitor_service.py     # 后台监控服务（浏览器自动恢复）
 ├── database.py            # SQLite 数据层
 ├── notifier.py            # 多渠道通知系统
+├── entrypoint.sh          # 容器启动脚本（属主修正 + Xvfb 有头模式 + 降权）
+├── start.bat              # 最终用户一键启动（Windows/Docker）
+├── Dockerfile             # 容器镜像（内置依赖 + 有头浏览器）
+├── docker-compose.yml     # 容器编排
 ├── requirements.txt       # 运行依赖
 ├── requirements-dev.txt   # 开发依赖（pytest/ruff）
 ├── pyproject.toml         # pytest/ruff 配置

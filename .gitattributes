@@ -1,0 +1,10 @@
+# 关键脚本强制 LF 换行：容器/UNIX 环境执行 shell 脚本时 CRLF 会导致失败
+entrypoint.sh text eol=lf
+*.sh text eol=lf
+Dockerfile text eol=lf
+docker-compose.yml text eol=lf
+requirements.txt text eol=lf
+requirements-dev.txt text eol=lf
+Makefile text eol=lf
+*.py text eol=lf
+*.bat text eol=crlf

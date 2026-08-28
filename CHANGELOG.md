@@ -28,6 +28,12 @@
 - `monitor_service` 轮询间隔默认值与 `config`/仪表盘一致（`MONITOR_INTERVAL_MINUTES` 生效）
 - mtop AppKey、启动重试/冷却、关键词间隔、兜底价格上限等剩余魔法数字收敛为具名常量
 
+### 容器封装（最终用户零配置）
+- 新增 `entrypoint.sh`：以 root 修正数据卷属主后降权非 root 运行、启动 Xvfb 虚拟显示、以有头模式运行（规避闲鱼无头拦截）
+- 新增 `start.bat`：Windows 用户双击一键构建并启动容器（需 Docker Desktop）
+- Dockerfile 改为 root 进入 + 降权，兼容宿主卷挂载无需手动 chown
+- compose 移除强制 `MONITOR_HEADLESS=1`，改由 entrypoint 默认有头
+
 ## [1.0.0] - 2026-08-28
 
 ### 新增
