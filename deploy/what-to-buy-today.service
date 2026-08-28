@@ -6,6 +6,7 @@ After=network.target
 Type=simple
 User=ubuntu
 WorkingDirectory=/opt/what-to-buy-today
+EnvironmentFile=-/opt/what-to-buy-today/.env
 ExecStart=/usr/bin/python3 /opt/what-to-buy-today/app.py --no-browser --port 5000
 Restart=always
 RestartSec=10

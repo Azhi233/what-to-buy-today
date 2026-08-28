@@ -382,3 +382,82 @@ except Exception as e:
 - **文件**：`monitor.py` `parse_price_extended()`
 - **问题**：`max_price < 10000` 且无显式"万"时，真实"3.20万"商品仍被读成 `3.2` 元，污染价格历史的 min/avg。
 - **建议**：低优先级；若后续做，可在记录价格历史时对"明显低于 min_price 且疑似万元"的值做一次复核，或仅对进入统计的样本做异常过滤。
+
+---
+
+# 第五轮：工程化复查（可部署 / 可信任 / 可维护）
+
+> 基线：`pytest` 13 passed、`ruff check` 全通过、`py_compile` 通过。
+> 结论：代码已具备工程化骨架（env 密钥、API 鉴权、依赖锁定、CI/lint/test、死代码清理），**但 Docker 部署链路仍有 2 个会导致"容器起来了却连不上"的阻断问题（E1/E2），另有 1 个密钥边界文档误导（E3）**，建议优先处理。
+
+## 已达标（无需再动）✅
+- 环境变量密钥注入（`DASHBOARD_TOKEN` / `BARK_*` / `SMTP_*` 等，`config.py` 用 `_env*` 读取）✅
+- API 鉴权中间件（`hmac.compare_digest`，非本地 401，`/api/healthz` 豁免）✅
+- 依赖锁定（`requirements.txt` 固定 playwright，`requirements-dev.txt` 分离 pytest/ruff）✅
+- CI（`.github/workflows/ci.yml`）+ Makefile（`check = compile + lint + test`）✅
+- 双存储/死代码清理（`storage.py` 删除，`run.py` 收敛到 SQLite + MonitorService）✅
+- CSV 导出文件名消毒（`re.sub` 防路径穿越）✅
+- `stop(timeout)` 优雅关闭 + `login_ok` 三态 ✅
+
+## 阻断 / 高优先级 ⚠️
+
+### - [x] E1 【高】Docker 下 app 绑定 127.0.0.1，宿主机无法通过映射端口访问
+> ✅ 修复说明：`app.py` 新增 `--host` 参数（默认 `127.0.0.1`），`app.run` 改用 `args.host`；`Dockerfile` CMD 传入 `--host 0.0.0.0`。
+- **文件**：`app.py:702`（`app.run(host="127.0.0.1", ...)`）+ `Dockerfile:19`（CMD 无 `--host`）
+- **问题**：容器内绑定 `127.0.0.1` 只监听回环，`docker-compose` 的 `-p 5000:5000` 转发到容器 eth0，命中不到回环监听 → 宿主机访问 `http://localhost:5000` 连接被拒。healthcheck 在容器内走 `127.0.0.1` 反而 healthy，形成"healthy 但连不上"的假象。
+- **建议**：`app.py` 增加 `--host` 参数（默认 `127.0.0.1`，容器用 `0.0.0.0`），或读 `HOST` 环境变量；`Dockerfile` CMD 改为 `["python","app.py","--no-browser","--port","5000","--host","0.0.0.0"]`。
+
+### - [x] E2 【高】Docker 默认 `headless=False` 无显示环境，Chromium 无法启动
+> ✅ 修复说明：`docker-compose.yml` 的 `environment` 显式加 `MONITOR_HEADLESS=1`（含 Xvfb 二选一注释）；`.env.example` 默认值改为 1 并加注释。
+- **文件**：`.env.example:32`（`MONITOR_HEADLESS=0`）+ `docker-compose.yml`（未覆盖 headless）
+- **问题**：容器默认 `headless=False`（有头模式）需要 X11 显示，Playwright 基础镜像不含 Xvfb → Chromium 启动失败 → `service.status="error"` → 监控线程直接退出、healthz 转 unhealthy，容器空转。
+- **建议**：容器部署强制 `MONITOR_HEADLESS=1`（接受风控风险），或在 Dockerfile 安装并启动 Xvfb；同时在 compose 的 `environment` 里显式 `MONITOR_HEADLESS=1` 或文档说明二选一。
+
+### - [x] E3 【高】`config.py` 头注释谎称"已被 .gitignore 忽略"，实际被 Git 追踪
+> ✅ 修复说明：采用方案 (b)——修正 `config.py` 头注释为"可提交的占位模板（密钥走环境变量）"；删除冗余的 `config.example.py`；同步修正 `.gitignore` 注释及 README/PROJECT_SUMMARY/deploy 三处文档引用。
+- **文件**：`config.py:3,12`（"不入库，已被 .gitignore 忽略"）+ `.gitignore`（并未忽略 config.py）
+- **问题**：`config.py` 实际被追踪（`git ls-files` 命中），且另有冗余的 `config.example.py`（未追踪）。若用户按头注释理解、把真实 Bark/SMTP 密钥填进 `config.py`，会被提交进仓库。
+- **建议**：二选一并修正注释——(a) 只保留 `config.example.py`，在 `.gitignore` 加 `config.py`；或 (b) 删除 `config.example.py`、保留追踪的 `config.py`，并把头注释改为"本文件为占位模板，真实密钥请用环境变量"。推荐 (a)。
+
+## 中优先级
+
+### - [x] E4 `run.py` 与 `app.py` 的 DB 路径解析不一致
+> ✅ 修复说明：新增 `database.resolve_db_path()`（BASE_DIR 锚定 + `os.makedirs`），`app.py` 与 `run.py` 均改用它，两个入口解析到同一绝对路径。
+- **文件**：`run.py:87`（`os.path.join(data_dir, "monitor.db")`，相对 CWD）vs `app.py:64`（`os.path.abspath(BASE_DIR/...)`）
+- **问题**：`run.py` 用 CWD 相对路径且未 `os.makedirs`；在非项目目录执行 `run.py --stats/--check` 会打开错误的空库或直接报"unable to open database file"。
+- **建议**：`run.py` 复用与 `app.py` 相同的 BASE_DIR 锚定 + `os.makedirs(exist_ok=True)`，最好抽成一个公共函数（如 `database.resolve_db_path()`）。
+
+### - [x] E5 迁移后遗留根目录 `monitor.db` 未删除
+> ✅ 修复说明：迁移改用 sqlite3 `backup` API（正确带上 WAL 数据），成功后删除旧文件并记录日志；已手动清理当前遗留的根目录 monitor.db。
+- **文件**：`app.py:68-70`（`shutil.copy2` 迁移后未删源）
+- **问题**：根目录旧 `monitor.db` 与 `data/monitor.db` 并存，易混淆（当前 `monitor.db`=159KB 已冻结，`data/monitor.db`=163KB 活跃）。
+- **建议**：迁移成功后删除旧文件（或改名 `.bak`），并打印一条迁移日志。
+
+### - [x] E6 R14 的 `suspicious_literal` 对高 min_price 监控重新引入万元误判
+> ✅ 修复说明：`suspicious_literal` 增加 `wan*10000 > max_price*3` 约束（仅当万元解释远超监控上限时才启用）。实测高 min(25000) 下 3.5 元 → 3.5；低 min(500) 下 3.20 → 32000（R14 保留）。
+- **文件**：`monitor.py:124-126`（`suspicious_literal = min_price > 0 and wan < min_price*0.1`）
+- **问题**：`min_price` 很高时（如 DGX spark min=25000），一个 3.5 元的低价配件 `wan=3.5 < 2500` → 被判万元 → `35000`，再次污染统计（虽不会推送，但污染 price_history 均值/中位）。
+- **建议**：让 `suspicious_literal` 与 `plausible_wan` 互斥（仅当 `max_price` 量级不支持万元时才启用 suspicious 回退），或给万元候选值再加"与 max_price 同量级"约束；补一条 `min_price` 参与的单测。
+
+## 低优先级
+
+### - [x] E7 鉴权支持 `?token=` 查询串，Token 易泄漏
+> ✅ 修复说明：移除 `request.args.get("token")` 回退，鉴权仅保留 `X-Auth-Token` / `Authorization: Bearer`（前端已用 X-Auth-Token，无影响）。
+- **文件**：`app.py:95`（`request.args.get("token")`）
+- **建议**：移除查询串鉴权，仅保留 `X-Auth-Token` / `Authorization: Bearer`；如确需给 healthcheck/脚本用，单独用受限作用域的 token。
+
+### - [x] E8 测试直接 `import app` 打开真实 `data/monitor.db`
+> ✅ 修复说明：新增 `tests/conftest.py`，在导入应用前把 `MONITOR_DATA_DIR` 重定向到临时目录（atexit 清理），测试不再触碰生产库。
+- **文件**：`tests/test_app.py`（`from app import app` 触发模块级 DB 初始化）
+- **问题**：测试运行在真实数据库上，缺少隔离（易污染生产数据，且与本地数据耦合）。
+- **建议**：用 `tmp_path` + 工厂函数/`app.config` 注入 DB 路径，或提供 `create_app(db_path)` 工厂使测试可指向临时库。
+
+### - [x] E9 `healthz` 在 `service.status=="stopped"` 时仍返回 healthy
+> ✅ 修复说明：`healthy = db_ok and service.status in {"starting","running","checking"}`；同步更新两处 healthz 测试以显式设置 status。
+- **文件**：`app.py:159`（`healthy = db_ok and service.status not in {"error"}`）
+- **建议**：healthy 应要求 `service.status in {"running","checking"}`（或至少 `starting`）；`start_period` 只覆盖启动窗口，无法区分"正常停止"与"未运行"。
+
+### - [x] E10 `Makefile compile` 硬编码文件清单
+> ✅ 修复说明：`compile` 改用 `python -m compileall -q . -x '(\.venv|venv|\.git|browser_profile)'`，自动覆盖新增 .py 文件。
+- **文件**：`Makefile:7`
+- **建议**：改用 `python -m compileall -q .`（配合 .gitignore 排除缓存），避免新增 `.py` 文件后 lint 覆盖不到。

@@ -16,6 +16,13 @@
 - 📊 **Web 仪表盘**：可视化查看商品、市场分析、降价记录（`python app.py`）
 - 🔄 **自动恢复**：浏览器意外关闭/崩溃时自动重启，无需人工干预
 
+## 入口说明
+
+- `python app.py`：**唯一常驻入口**，启动仪表盘 + 后台监控（推荐）。
+- `python run.py`：**运维入口**，仅用于 `run.py --login` 扫码登录、`--once` 单轮检查、`--stats`/`--check` 状态检查。
+
+两者共用同一套 SQLite 数据与浏览器登录态（`data/`、`browser_profile/`），**不要同时常驻两个入口**（`app.py` 已有单实例保护）。
+
 ## 快速开始
 
 ### 1. 安装依赖
@@ -45,20 +52,29 @@ python run.py --login
 
 > 💡 **安全建议**：如果担心风险，建议用一个**专门的小号**（手机号注册的新账号）来监控，完全不影响主账号。
 
-### 3. 配置监控商品
+### 3. 配置
 
-编辑 `config.py`：
+**本地开发**：直接编辑仓库中的 `config.py` 的 `MONITOR_ITEMS`（已为占位模板）；密钥通过环境变量注入（推荐容器/服务部署）。
+
+```bash
+# 复制 .env.example -> .env 配合 docker compose / systemd 使用
+cp .env.example .env
+```
 
 ```python
+# config.py 示例
 MONITOR_ITEMS = [
     {
-        "keyword": "iPhone 15 Pro Max",  # 搜索关键词
-        "max_price": 5000,               # 最高接受价格
-        "min_price": 500,                # 最低价格（过滤骗局）
-        "exclude_keywords": ["换屏", "拆机", "模型机"],  # 排除的关键词
+        "keyword": "iPhone 15 Pro Max",
+        "max_price": 5000,
+        "min_price": 500,
+        "exclude_keywords": ["换屏", "拆机", "模型机"],
+        "must_include": ["国行", "256G"],
     },
 ]
 ```
+
+敏感配置支持环境变量覆盖（见 `config.py` / `.env.example`），例如 `DASHBOARD_TOKEN`、`BARK_KEY`、`SMTP_PASSWORD` 等。
 
 ### 4. 配置通知渠道（任选一个）
 
@@ -72,21 +88,15 @@ MONITOR_ITEMS = [
 ### 5. 启动监控
 
 ```bash
-python app.py              # 唯一常驻入口：仪表盘 + 后台监控
-python run.py --login      # 运维操作：扫码登录
-python run.py --once       # 运维操作：只检查一轮
-python run.py --stats      # 运维操作：查看 SQLite 统计
+python app.py                          # 常驻：仪表盘 + 后台监控（自动开浏览器）
+python app.py --no-browser --port 5000 # 常驻（容器/服务推荐）：不弹浏览器
+python run.py --login                  # 运维：扫码登录
+python run.py --once                   # 运维：只检查一轮后退出
+python run.py --stats                  # 运维：查看 SQLite 统计
+python run.py --check                  # 运维：配置与依赖检查
 ```
 
-浏览器窗口会保持打开（可最小化），这是**故意的**——闲鱼风控会拦截无头浏览器。
-
-### 6. 使用 Web 仪表盘（可选）
-
-```bash
-python app.py              # 启动仪表盘，自动打开浏览器
-```
-
-仪表盘提供：监控商品增删改、市场价格分析图表、降价记录、通知记录、立即检查按钮。监控服务随仪表盘自动运行，两者共用同一套数据。
+浏览器窗口会保持打开（可最小化），这是**故意的**——闲鱼风控会拦截无头浏览器。部署方式见 `deploy/README.md`。
 
 ## 卖家信用与防骗过滤
 
@@ -127,19 +137,37 @@ python app.py              # 启动仪表盘，自动打开浏览器
 
 ```
 buy/
-├── config.py          # 配置文件（监控商品、信用过滤、通知渠道）
-├── monitor.py         # 闲鱼搜索监控核心（含信用提取、引流识别）
-├── monitor_service.py # 后台监控服务（浏览器自动恢复）
-├── database.py        # SQLite 数据层
-├── notifier.py        # 多渠道通知系统
-├── app.py             # Web 仪表盘入口
-├── run.py             # 命令行入口（--login / --once / --stats）
-├── templates/         # 仪表盘页面模板
-├── static/            # 仪表盘前端资源
-├── browser_profile/   # 浏览器登录配置（自动生成）
-├── monitor.db         # 商品数据（自动生成）
-└── requirements.txt
+├── app.py                 # 唯一常驻入口：Flask 仪表盘 + 后台监控
+├── run.py                 # 运维入口：--login / --once / --stats / --check
+├── config.py              # 可提交的占位配置（MONITOR_ITEMS 在此编辑，密钥走环境变量）
+├── .env.example           # 环境变量模板（容器/systemd 推荐）
+├── monitor.py             # 闲鱼搜索核心（含信用提取、引流识别）
+├── monitor_service.py     # 后台监控服务（浏览器自动恢复）
+├── database.py            # SQLite 数据层
+├── notifier.py            # 多渠道通知系统
+├── requirements.txt       # 运行依赖
+├── requirements-dev.txt   # 开发依赖（pytest/ruff）
+├── pyproject.toml         # pytest/ruff 配置
+├── Makefile               # make check / test / lint
+├── CHANGELOG.md           # 变更记录（语义化版本）
+├── deploy/                # Docker/systemd 部署说明
+├── templates/             # 仪表盘页面模板
+├── static/                # 仪表盘前端资源
+├── tests/                 # pytest 用例
+├── browser_profile/       # 浏览器登录态（自动生成，已忽略）
+└── data/                  # SQLite 数据（data/monitor.db，已忽略）
 ```
+
+## 开发与质量检查
+
+```bash
+pip install -r requirements-dev.txt
+make check        # compileall + ruff + pytest
+make lint         # ruff check .
+make test         # pytest
+```
+
+CI 见 `.github/workflows/ci.yml`。变更记录见 `CHANGELOG.md`，历史问题/修复追溯见 `OPTIMIZATION_CHECKLIST.md`。
 
 ## 常见问题
 
@@ -150,10 +178,10 @@ A: 本工具只搜索不进行任何写操作，行为与真人浏览一致。�
 A: 闲鱼网页版搜索 API 要求登录。登录后我们只做搜索（最普通的用户行为），风险很低。
 
 **Q: 推送没收到怎么办？**
-A: 先用 `--once` 模式测试，观察控制台是否有 `📦` 输出。若控制台正常但推送失败，检查通知渠道配置。
+A: 先用 `python run.py --once` 或 `python run.py --check` 观察输出；再检查通知渠道配置与 `DASHBOARD_TOKEN`。
 
 **Q: 找不到商品？**
 A: 确认已登录（`python run.py --once` 会提示）。若仍找不到，可能是搜索无结果或页面结构变化。
 
 **Q: 电脑关机了监控还运行吗？**
-A: 不运行。需要电脑保持开机。如果想 24 小时监控，可以考虑把项目部署到云服务器（如阿里云轻量服务器）。
+A: 不运行。需要电脑保持开机。如果想 24 小时监控，可以考虑把项目部署到云服务器（见 `deploy/README.md`）。

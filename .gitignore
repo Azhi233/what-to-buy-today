@@ -1,23 +1,28 @@
-# 生成的数据
+# Runtime data (SQLite WAL must stay in same dir as DB)
 data/monitor.db
 data/monitor.db-shm
 data/monitor.db-wal
+*.db
+*.db-shm
+*.db-wal
 browser_profile/
 
 # Python
 __pycache__/
 *.pyc
 *.pyo
+.venv/
+venv/
+.env
 
-# 日志
+# Logs
 *.log
-
-# SQLite 数据库
-*.db
-
-# PID 文件
 dashboard.pid
 
-# Bark Key 等敏感信息（如 config.py 里的真实 Key 请勿提交）
-# 请将 config.py 中的 BARK_CONFIG.key / PUSHPLUS_CONFIG.token 等替换为占位符后再提交
-config.py
+# Test / lint caches
+.pytest_cache/
+.ruff_cache/
+
+# Secrets are never committed: config.py is tracked as a placeholder template
+# with env-var defaults. Real keys go into environment variables (.env for
+# Docker/systemd) — never commit real keys into config.py.
