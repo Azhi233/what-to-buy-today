@@ -129,18 +129,20 @@ Write-Step "6/7 注册自启服务 [$TaskName]"
 # 关键：用 ONLOGON + 当前交互用户（而非 ONSTART + SYSTEM）。
 # Windows 的 Session 0（服务会话）无法创建窗口，有头 Chromium 会启动失败；
 # 用户登录会话里有头模式正常。安装完成后会立即启动一次。
+# 任务入口为 tray.py（系统托盘）：启动后托盘图标常驻，
+# 右键菜单可打开仪表盘 / 重新登录 / 退出；监控进程由托盘自动管理。
 $WorkDir = $APP_DIR
-$cmd = "`"$VenvPython`" `"$APP_DIR\app.py`" --no-browser"
+$cmd = "`"$VenvPython`" `"$APP_DIR\tray.py`""
 # 最小权限（S-08）：任务以当前用户普通权限运行，不提升为 HIGHEST
 schtasks /Create /F /TN $TaskName `
     /TR "$cmd" `
     /SC ONLOGON `
     | Out-Null
 if ($LASTEXITCODE -ne 0) {
-    Write-ERR "服务注册失败（schtasks）。可用手动方式：python $APP_DIR\app.py --no-browser"
+    Write-ERR "服务注册失败（schtasks）。可用手动方式：python $APP_DIR\tray.py"
     exit 1
 }
-Write-OK "已注册任务 [$TaskName]（用户登录后自启，崩溃自动重启）"
+Write-OK "已注册任务 [$TaskName]（用户登录后自启，托盘图标常驻）"
 
 # ── 7. 首次登录 + 启动 ────────────────────────────────────
 Write-Step "7/7 首次登录与启动"
@@ -162,10 +164,12 @@ Start-Sleep -Seconds 3
 Write-Host ""
 Write-Host "============================================================" -ForegroundColor Green
 Write-Host "  安装完成！" -ForegroundColor Green
-Write-Host "  仪表盘: http://127.0.0.1:5000" -ForegroundColor Green
-Write-Host "  服务任务: $TaskName（开机自启，崩溃自动重启）" -ForegroundColor Green
-Write-Host "  卸载: .\uninstall.ps1" -ForegroundColor Green
-Write-Host "  登录: .\.venv\Scripts\python.exe run.py --login" -ForegroundColor Green
+Write-Host "  托盘图标: 系统托盘（右下角）出现橙色价格图标" -ForegroundColor Green
+Write-Host "  右键图标: 显示仪表盘 / 重新登录闲鱼 / 退出" -ForegroundColor Green
+Write-Host "  仪表盘:   http://127.0.0.1:5000" -ForegroundColor Green
+Write-Host "  服务任务:  $TaskName（用户登录后自启）" -ForegroundColor Green
+Write-Host "  卸载:      .\uninstall.ps1" -ForegroundColor Green
+Write-Host "  登录:      .\.venv\Scripts\python.exe run.py --login" -ForegroundColor Green
 Write-Host "============================================================" -ForegroundColor Green
 Write-Host ""
 if (-not $Silent) {

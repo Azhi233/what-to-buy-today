@@ -5,3 +5,8 @@ flask>=3.0,<4
 
 # Optional: enables RSS memory reporting in /api/healthz
 psutil>=5.9,<7
+
+# System tray app (tray.py) — Windows 托盘图标
+pystray>=0.19,<1
+Pillow>=10,<13
+pywin32>=306; sys_platform == "win32"

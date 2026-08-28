@@ -53,6 +53,7 @@ Source: "monitor.py"; DestDir: "{app}"; Flags: ignoreversion
 Source: "monitor_service.py"; DestDir: "{app}"; Flags: ignoreversion
 Source: "database.py"; DestDir: "{app}"; Flags: ignoreversion
 Source: "notifier.py"; DestDir: "{app}"; Flags: ignoreversion
+Source: "tray.py"; DestDir: "{app}"; Flags: ignoreversion
 Source: "requirements.txt"; DestDir: "{app}"; Flags: ignoreversion
 Source: "requirements-dev.txt"; DestDir: "{app}"; Flags: ignoreversion
 Source: ".env.example"; DestDir: "{app}"; Flags: ignoreversion
@@ -65,6 +66,7 @@ Source: "uninstall.ps1"; DestDir: "{app}"; Flags: ignoreversion
 [Icons]
 Name: "{group}\打开监控仪表盘"; Filename: "http://127.0.0.1:5000"
 Name: "{group}\重新登录闲鱼"; Filename: "{app}\.venv\Scripts\python.exe"; Parameters: "{app}\run.py --login"
+Name: "{group}\启动托盘监控"; Filename: "{app}\.venv\Scripts\python.exe"; Parameters: "{app}\tray.py"
 Name: "{group}\查看文档"; Filename: "https://github.com/Azhi233/what-to-buy-today#readme"
 Name: "{group}\{cm:UninstallProgram,{#MyAppName}}"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\{#MyAppName}"; Filename: "http://127.0.0.1:5000"; Tasks: desktopicon
