@@ -33,7 +33,6 @@ PrivilegesRequired=admin
 ArchitecturesInstallIn64BitMode=x64compatible
 DisableProgramGroupPage=yes
 CloseApplications=yes
-UninstallDisplayIcon={app}\static\favicon.ico
 ; 安装后自动清理（避免卸载残留计划任务）
 UsePreviousAppDir=yes
 

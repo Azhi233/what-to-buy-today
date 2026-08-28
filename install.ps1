@@ -119,6 +119,9 @@ if (-not (Test-Path "$APP_DIR\.env") -and (Test-Path "$APP_DIR\.env.example")) {
 }
 New-Item -ItemType Directory -Force -Path "$APP_DIR\data" | Out-Null
 New-Item -ItemType Directory -Force -Path "$APP_DIR\browser_profile" | Out-Null
+# 安装进程以管理员运行，创建的数据目录需保证普通权限的监控进程可写（最小权限，S-08）
+icacls "$APP_DIR\data" /grant "$($env:USERDOMAIN)\$($env:USERNAME):(OI)(CI)M" 2>$null | Out-Null
+icacls "$APP_DIR\browser_profile" /grant "$($env:USERDOMAIN)\$($env:USERNAME):(OI)(CI)M" 2>$null | Out-Null
 Write-OK "数据目录就绪"
 
 # ── 6. 注册系统级服务（任务计划程序）─────────────────────

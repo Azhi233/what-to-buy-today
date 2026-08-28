@@ -23,6 +23,9 @@ dashboard.pid
 .pytest_cache/
 .ruff_cache/
 
+# Inno Setup build output
+Output/
+
 # Secrets are never committed: config.py is tracked as a placeholder template
 # with env-var defaults. Real keys go into environment variables (.env for
 # Docker/systemd) — never commit real keys into config.py.
