@@ -17,6 +17,10 @@
 import os
 import sys
 
+# 项目根目录：所有默认路径（数据/浏览器配置/日志）基于此，
+# 避免从服务/计划任务启动（工作目录非项目根）时把数据写到错误位置
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
 
 def _env(name: str, default: str = "") -> str:
     """读取并清理环境变量；未设置时回退到本地文件值。"""
@@ -235,10 +239,10 @@ MONITOR_SETTINGS = {
 
     # 浏览器配置目录（保存登录状态）
     # 首次运行 python run.py --login 扫码登录后，登录态保存在这里
-    "user_data_dir": _env("MONITOR_BROWSER_PROFILE", "./browser_profile"),
+    "user_data_dir": _env("MONITOR_BROWSER_PROFILE", os.path.join(BASE_DIR, "browser_profile")),
 
     # 数据存储目录（已发现的商品会记录在这里，避免重复推送）
-    "data_dir": _env("MONITOR_DATA_DIR", "./data"),
+    "data_dir": _env("MONITOR_DATA_DIR", os.path.join(BASE_DIR, "data")),
 
     # 每页监控的商品数量上限
     "max_items_per_page": _env_int("MONITOR_MAX_ITEMS", 60),

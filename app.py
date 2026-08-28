@@ -40,14 +40,19 @@ from notifier import BarkNotifier, NotifierManager
 _LOG_FMT = "%(asctime)s [%(levelname)s] %(message)s"
 _LOG_DATEFMT = "%Y-%m-%d %H:%M:%S"
 
+# 项目根目录：日志/PID 等默认路径基于此，服务启动（工作目录非项目根）时也能写到正确位置
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
 # ── 价格分布直方图参数（C5）──
 DIST_IQR_MULTIPLIER = 1.5       # IQR 离群值剔除系数，与 _iqr_trim 保持一致
 DIST_MIN_CORE_SAMPLES = 3       # 核心样本过少时退回全量价格，避免单桶失真
 DIST_BINS = 12                  # 直方图分桶数
 
 
-def _setup_logging(log_file: str = "dashboard.log"):
-    """配置日志：控制台 + 轮转文件（5MB x3）。"""
+def _setup_logging(log_file: str = ""):
+    """配置日志：控制台 + 轮转文件（5MB x3）。默认写入项目根 dashboard.log。"""
+    if not log_file:
+        log_file = os.path.join(BASE_DIR, "dashboard.log")
     formatter = logging.Formatter(_LOG_FMT, datefmt=_LOG_DATEFMT)
     handlers: list[logging.Handler] = [logging.StreamHandler(sys.stdout)]
     try:
@@ -65,7 +70,6 @@ def _setup_logging(log_file: str = "dashboard.log"):
 _setup_logging()
 logger = logging.getLogger("dashboard")
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = resolve_db_path(MONITOR_SETTINGS.get("data_dir", "./data"))
 LEGACY_DB_PATH = os.path.join(BASE_DIR, "monitor.db")
 if os.path.exists(LEGACY_DB_PATH) and not os.path.exists(DB_PATH):

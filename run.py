@@ -13,6 +13,7 @@
 import argparse
 import asyncio
 import logging
+import os
 import sys
 
 if sys.platform == "win32":
@@ -31,8 +32,13 @@ from notifier import NotifierManager
 _LOG_FMT = "%(asctime)s [%(levelname)s] %(message)s"
 _LOG_DATEFMT = "%Y-%m-%d %H:%M:%S"
 
+# 项目根目录：日志默认路径基于此，服务启动（工作目录非项目根）时也能写到正确位置
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-def _setup_logging(log_file: str = "monitor.log"):
+
+def _setup_logging(log_file: str = ""):
+    if not log_file:
+        log_file = os.path.join(BASE_DIR, "monitor.log")
     formatter = logging.Formatter(_LOG_FMT, datefmt=_LOG_DATEFMT)
     handlers: list[logging.Handler] = [logging.StreamHandler(sys.stdout)]
     try:
