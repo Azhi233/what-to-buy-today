@@ -138,7 +138,8 @@ def api_status():
         "last_error": service.last_error,
         "round_items": service.round_items,
         "round_matches": service.round_matches,
-        "interval_minutes": db.get_setting("interval_minutes", "30"),
+        "interval_minutes": db.get_setting(
+            "interval_minutes", str(MONITOR_SETTINGS.get("interval_minutes", 30))),
         "headless": build_monitor_settings(db).get("headless", False),
         "login_ok": service.login_ok,
     }
@@ -378,6 +379,13 @@ def api_export():
     import io
     from flask import Response
 
+    def _csv_safe(value) -> str:
+        """防止 CSV 公式注入：以 = + - @ 等开头的单元格加单引号前缀，避免 Excel 执行公式。"""
+        s = str(value)
+        if s.startswith(("=", "+", "-", "@", "\t", "\r")):
+            return "'" + s
+        return s
+
     keyword = request.args.get("keyword", "")
     items = db.get_latest_items(keyword=keyword or None, limit=5000)
 
@@ -387,9 +395,10 @@ def api_export():
                      "status", "seller_credit", "risk_flags", "notified",
                      "first_seen", "last_seen"])
     for r in items:
-        writer.writerow([r["item_id"], r["keyword"], r["title"], r["price"],
-                         r["url"], r["location"], r["status"],
-                         r["seller_credit"] or "", r["risk_flags"] or "",
+        writer.writerow([_csv_safe(r["item_id"]), _csv_safe(r["keyword"]), _csv_safe(r["title"]),
+                         r["price"], _csv_safe(r["url"]), _csv_safe(r["location"]),
+                         _csv_safe(r["status"]), _csv_safe(r["seller_credit"] or ""),
+                         _csv_safe(r["risk_flags"] or ""),
                          1 if r["notified"] else 0, r["first_seen"], r["last_seen"]])
 
     safe_keyword = re.sub(r"[^0-9A-Za-z\u4e00-\u9fff_]+", "_", keyword or "all").strip("_")[:60] or "all"

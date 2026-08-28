@@ -76,6 +76,39 @@ def test_export_filename_sanitized():
     assert disp.endswith(".csv")
 
 
+def test_export_prevents_csv_formula_injection():
+    """S-06：以 = + - @ 开头的单元格加单引号，防止 Excel 公式注入。"""
+    from database import Database
+    from app import db
+
+    db.add_product("CSV注入测试", 1000, 100, "", 1, "")
+    products = [p for p in db.get_products() if p["keyword"] == "CSV注入测试"]
+    assert products, "测试商品未创建"
+    pid = products[0]["id"]
+    try:
+        db.upsert_item({
+            "item_id": "csv_inject_1",
+            "title": "=HYPERLINK(http://evil.example)",
+            "price": 500,
+            "raw_price": "500",
+            "url": "https://www.goofish.com/item?id=csv_inject_1",
+            "image": "",
+            "location": "+86 13800000000",
+            "status": "",
+            "seller_credit": "",
+            "risk_flags": "@SUM(A1:A2)",
+        }, "CSV注入测试")
+        client = app.test_client()
+        resp = client.get("/api/export?keyword=CSV%E6%B3%A8%E5%85%A5%E6%B5%8B%E8%AF%95")
+        assert resp.status_code == 200
+        body = resp.data.decode("utf-8-sig")
+        assert "'=HYPERLINK(http://evil.example)" in body
+        assert "'+86 13800000000" in body
+        assert "'@SUM(A1:A2)" in body
+    finally:
+        db.delete_product(pid)
+
+
 # ── S-07 / S-04 / 运行控制 回归 ───────────────────────────────
 
 def test_bark_target_key_is_masked():
