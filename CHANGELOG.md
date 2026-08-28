@@ -63,6 +63,11 @@
 - 每步均可跳过；SMTP 配置存入数据库（`channel_config`），`notifier` 运行时读取覆盖 config
 - 新增 `GET/POST /api/channel-config`（密码脱敏）、`GET /api/onboarding/status`
 
+### 修复：重新登录空白页
+- 根因：监控（隐藏 Chromium）持有 `browser_profile` 的 SingletonLock，"重新登录"再用同一 profile 启动浏览器时，窗口被隐藏的监控实例接管 → 空白页
+- 修复：托盘"重新登录"先暂停监控释放 profile → 登录窗口正常显示 → 登录完成自动恢复监控
+- `run.py --login` 增加兜底：检测到监控在运行自动暂停（手动执行登录时同样有效）
+
 ## [1.0.0] - 2026-08-28
 
 ### 新增

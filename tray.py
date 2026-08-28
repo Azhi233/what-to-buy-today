@@ -15,6 +15,8 @@
 import os
 import subprocess
 import sys
+import threading
+import time
 import urllib.request
 
 from PIL import Image, ImageDraw
@@ -77,11 +79,24 @@ def on_open_dashboard(icon, item):
 
 
 def on_relogin(icon, item):
-    """弹出扫码登录窗口（run.py --login）。"""
-    subprocess.Popen(
+    """重新登录闲鱼：先暂停监控释放浏览器配置，登录完成后自动恢复监控。
+
+    若不先暂停，两个 Chromium 共用同一 profile 目录时登录窗口会被隐藏的
+    监控实例接管（表现为空白页/无法显示）。
+    """
+    _stop_monitor()  # 释放 profile 锁（taskkill 进程树，含监控 chromium）
+    proc = subprocess.Popen(
         [_python(), os.path.join(BASE_DIR, "run.py"), "--login"],
         cwd=BASE_DIR,
     )
+    threading.Thread(target=_restart_after_login, args=(proc,), daemon=True).start()
+
+
+def _restart_after_login(login_proc):
+    """登录进程退出（成功/超时/关闭窗口）后，等待 profile 释放再恢复监控。"""
+    login_proc.wait()
+    time.sleep(3)  # 等待 chromium 完全退出并释放 profile 锁
+    _ensure_monitor_running()
 
 
 def on_exit(icon, item):

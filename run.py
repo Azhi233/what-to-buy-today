@@ -15,6 +15,7 @@ import asyncio
 import logging
 import os
 import sys
+import time
 
 if sys.platform == "win32":
     try:
@@ -96,6 +97,31 @@ async def cmd_login(monitor):
         print("\n⚠️ 登录超时，请重新运行 python run.py --login")
 
 
+def _stop_running_monitor_if_any() -> None:
+    """登录需要独占浏览器配置目录：若监控正在运行则自动暂停（释放 profile 锁）。
+
+    否则两个 Chromium 共用同一 profile，登录窗口会被隐藏的监控实例接管（空白页）。
+    托盘触发的重新登录由 tray.py 先行暂停，这里作为兜底（手动执行 run.py --login 时）。
+    """
+    import subprocess
+
+    pid_file = os.path.join(BASE_DIR, "dashboard.pid")
+    if not os.path.exists(pid_file):
+        return
+    try:
+        with open(pid_file, encoding="utf-8") as f:
+            pid = int(f.read().strip())
+    except (ValueError, OSError):
+        return
+    if pid <= 0:
+        return
+    print("检测到监控正在运行，登录需独占浏览器配置，正在自动暂停监控...")
+    subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"],
+                   capture_output=True)
+    time.sleep(2)  # 等待 chromium 释放 profile 锁
+    print("监控已暂停。登录完成后请重启监控（托盘图标 → 退出后重新打开，或 python app.py）")
+
+
 async def main():
     parser = argparse.ArgumentParser(description="闲鱼价格监控")
     parser.add_argument("--login", action="store_true", help="扫码登录闲鱼（首次使用）")
@@ -147,6 +173,8 @@ async def main():
         sys.exit(1)
 
     if args.login:
+        # 登录需独占浏览器配置：若监控在运行先自动暂停（托盘触发时已暂停，这里兜底）
+        _stop_running_monitor_if_any()
         settings = dict(MONITOR_SETTINGS)
         settings["hide_browser_window"] = False  # 登录必须显示窗口供扫码
         await cmd_login(GoofishMonitor(settings))
