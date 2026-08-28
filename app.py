@@ -60,8 +60,6 @@ logger = logging.getLogger("dashboard")
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, "monitor.db")
-APP_STARTED_AT = time.time()
-
 db = Database(DB_PATH)
 db.seed_bark_from_config()
 notifier = NotifierManager(db)
@@ -274,7 +272,7 @@ def api_test_notify():
         f"这是一条测试推送，发送时间 {datetime.now().strftime('%H:%M:%S')}",
         "",
     )
-    return jsonify({"ok": ok, "channels": notifier.report_channels()})
+    return jsonify({"ok": bool(ok), "channels": ok})
 
 
 # ─────────────────────────────────────────────

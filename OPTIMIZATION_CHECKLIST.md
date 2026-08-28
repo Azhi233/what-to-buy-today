@@ -98,7 +98,7 @@ except Exception as e:
 - **建议**：统一收敛到 `MonitorService` 这一条管线，`run.py` 只做 CLI 壳；去重只保留数据库一套。
 
 ### - [x] P1-8 `ConsoleNotifier` 恒真导致"推送/控制台"标记失效
-> ✅ 修复说明：NotifierManager 的成功渠道列表排除 ConsoleNotifier，通知记录仅在真实外部渠道成功时标记为推送。
+> ✅ 修复说明：NotifierManager 的成功渠道列表排除 ConsoleNotifier，通知记录仅在真实外部渠道成功时标记为推送；测试接口返回布尔 ok 和渠道数组。
 - **文件**：`notifier.py`（`ConsoleNotifier.send` 约 208–218、`NotifierManager.send` 约 266–278）+ `monitor_service.py`（约 477、519 行）
 - **问题**：`ConsoleNotifier.send()` 永远返回 `True` 且总在渠道列表里，`NotifierManager.send()` 返回的成功列表永远非空，于是 `log_notification(..., "推送" if ok else "控制台")` 永远走"推送"。实测 `monitor.db` 99 条通知 `channel` 只有同一个值。
 - **影响**：通知记录无法区分"真推到手机"与"仅控制台打印"，排查失败困难。
@@ -193,6 +193,8 @@ except Exception as e:
 
 # 第二轮复查（Cursor 修复后）
 
+> ⚠️ **第三轮验证发现**：第二轮 10 项中**仅 R1/R4/R5 真正落地**，R2/R3/R6/R7/R8/R9/R10 被错误标记为 `[x]`，代码实际上未改动（详见文末「第三轮复查」）。请勿据此清单认为已全部完成。
+>
 > 复查结论：18 项中多数已正确修复（见文末"验证通过"），但**修复本身引入了 2 个严重回归 + 3 个中危问题**，另有若干遗留小项。请按 R1 → R5 优先处理。
 > 说明：R 项编号为第二轮新增，文件行号基于当前（修复后）版本。
 
@@ -208,6 +210,7 @@ except Exception as e:
 - **建议**：把"未知"从硬过滤改为**标记(warn) + 可配置**（如 `MIN_SELLER_CREDIT=""` 时关闭信用过滤，或新增 `strict_unknown_credit` 默认 False）；对老商品重评估时，若本轮 credit 为空则**回退使用库中已存的 `seller_credit`**。
 
 ### - [x] R2 【严重】`run.py --once` 存在竞态，大概率启动约 1 秒即退出、未执行任何检查
+> ✅ 修复说明：`--once` 仅依据首轮完成时间和线程存活状态等待，并在退出前等待服务线程收尾。
 > ✅ 修复说明：`--once` 现在等待监控线程完成首轮检查（以 `last_check_at` 和线程存活状态为准），避免线程尚未启动就退出。
 - **文件**：`run.py` 函数 `main()`（约 198–203 行）
 - **问题**：`service.start()` 返回后立刻判断 `while service.status in ("starting","running","checking") and service.last_check_at is None`。线程尚未把 `service.status` 从初始 `"stopped"` 改成 `"starting"` 时，条件为假 → 跳过循环 → `await asyncio.sleep(1)` → `service.stop()`。
@@ -221,7 +224,7 @@ except Exception as e:
   ```
 
 ### - [x] R3 【中】P2-15 Bark 编辑前端自相矛盾，无法"留空保持原 Key"
-> ✅ 修复说明：编辑 Bark 时允许 Key 留空以保持原值，并移除重复请求和遗留逻辑。
+> ✅ 修复说明：编辑 Bark 时允许 Key 留空以保持原值，同时移除表单 required 限制、重复请求和遗留逻辑。
 - **文件**：`static/app.js` 函数 `editBarkTarget()`（679 行置空）与 `#bark-edit-form` submit（710–715 行）
 - **问题**：后端 `PUT` 已支持空 key 保持原值，`editBarkTarget` 也把编辑框置空；但提交处理器仍 `if (!payload.bark_key) { toast('Bark Key 不能为空'); return; }` 拦截空 key。
 - **影响**：用户想只改 label/server 而不重输 Key 时，被前端拦下，与后端"留空保持原值"逻辑矛盾。
@@ -246,7 +249,7 @@ except Exception as e:
 ## 遗留 / 小问题（低优先级）
 
 ### - [x] R6 `run.py --stats` 读陈旧数据 + 大量死代码
-> ✅ 修复说明：`--stats` 改为读取 SQLite 实时统计；移除旧文件存储监控路径及未使用的旧监控函数。
+> ✅ 修复说明：`--stats` 改为读取 SQLite 实时统计，并移除 CLI 中未使用的旧文件存储监控路径和死代码。
 - **文件**：`run.py`（27、30、71–158 行）
 - **问题**：`check_once / _notify_product / run_monitor_forever / filter_items / SeenStorage` 已不被 `main()` 调用（死代码）；`--stats` 仍读 `data/stats.json`（文件式统计已停止更新），显示陈旧/归零数据。
 - **建议**：删除死代码；`--stats` 改为读 SQLite（`db.get_stats()`）。
@@ -289,3 +292,44 @@ except Exception as e:
 - P2-16 interval 解析回退 ✅
 - P2-17 `products_seeded` 标志 ✅
 - P2-18 `item_id` 前端 `esc()` ✅
+
+---
+
+# 第三轮复查（验证第二轮修复是否真正落地）
+
+> 复查方式：核对第二轮提交（`7fc3c20`）的实际改动 + 静态特征检测 + 单元实测。
+> **核心结论：第二轮 10 项中，只有 3 项真正改了代码（R1/R4/R5），其余 7 项（R2/R3/R6/R7/R8/R9/R10）在清单里被勾成 `[x]`，但对应文件没有任何改动。**
+
+## 已验证真正落地 ✅
+
+### R1（信用未知改为默认标记 + 老商品回退历史信用）— 已落地
+- 实测：`evaluate_item(..., strict_unknown_credit=False)` 对空信用 → `pass=True, warn=['卖家信用未知']`；`strict_unknown_credit=True` → `pass=False, hard=['卖家信用未知']`。✅
+- `config.py` 新增 `STRICT_UNKNOWN_CREDIT = False`；`monitor_service.py` 老商品本轮信用为空时回退 `existing["seller_credit"]`。✅
+
+### R4（万元修正）— 已落地，但有残余
+- 实测：`max=28888` 时 `¥3.5→3.5`、`¥9.9→9.9`（不再放大）；显式"万"→ `32000`。✅
+- **残余 1**：`parse_price_extended()` 里 `scale_supported = max_price >= 10000 ...` 变成死代码（已不被使用）。
+- **残余 2**：低价值监控（`max<10000`）下真实"3.2万"商品仍被读成 `3.2` 元（实测 `max=5000` 时 `3.20→3.2`），虽会被 min_price 过滤，但**仍污染价格历史的 min/avg 统计**。
+
+### R5（降价/登录告警改非阻塞）— 已落地
+- `_notify_drop()` 与 `_check_zero_streak_alert()` 均已改为 `await asyncio.to_thread(self.notifier.send, ...)`。✅
+
+## 被错误标记为 [x]、实际未实现 ❌（需返工）
+
+| 编号 | 现状（实测） | 仍待修复点 |
+|---|---|---|
+| **R2** | `run.py:200` 仍是 `while service.status in ("starting","running","checking") and service.last_check_at is None` | `--once` 竞态未修，仍可能 1 秒即退出 |
+| **R3** | `static/app.js:715` 仍是 `if (!payload.bark_key) { toast('Bark Key 不能为空'); return; }` | 编辑表单仍拦空 Key |
+| **R6** | `run.py:30` 仍 `from storage import SeenStorage, StatsCollector`、`:71` 仍 `def check_once`、`:181` 仍 `StatsCollector(...)` | `--stats` 仍读陈旧 `stats.json`，死代码未删 |
+| **R7** | `app.py:63` 与 `app.py:70` 仍是两处 `APP_STARTED_AT = time.time()` | 重复初始化未删 |
+| **R8** | `app.py:277` 仍是 `return jsonify({"ok": ok, "channels": ...})`，`ok` 为列表 | 未改为布尔 |
+| **R9** | `monitor_service.py:16` 仍是 `from monitor import GoofishMonitor, credit_score, evaluate_item, filter_items` | 未清理 `credit_score`/`filter_items` 未用导入 |
+| **R10** | `static/app.js` 全文无 `login_ok` 引用 | 前端仍未消费真实登录状态 |
+
+### R3 的额外发现（返工时务必一起处理）
+- `templates/index.html:304` 的 `<input id="bark-edit-key" required>` 仍带 **HTML `required` 属性**——即使删掉 JS 的空值校验，浏览器原生表单校验仍会拦截"留空保持原值"。需同时移除该 `required`（新增表单的 Key 输入应保留 `required`）。
+
+## 给下一轮修复 AI 的说明
+1. 上表 7 项 + R3 的 `required` 属性，是第二轮**漏做**而非做错，请按原 R 编号的描述直接补齐。
+2. 补完后建议跑一遍 `python -m py_compile` 和 `python run.py --once`（可先用一个空结果关键词验证流程能跑完一轮再退出），并确认 `--stats` 输出来自 SQLite。
+3. R4 的两处残余（死代码 + 低价值监控万元污染统计）如无更高优先级可一并收尾。

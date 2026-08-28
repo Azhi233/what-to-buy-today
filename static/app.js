@@ -70,11 +70,12 @@ async function refreshStatus() {
     const s = await api('/api/status');
     const dot = $('#status-dot');
     const text = $('#status-text');
-    dot.className = 'status-dot ' + s.monitor_status;
-    text.textContent = {
+    const loginFailed = s.login_ok === false;
+    dot.className = 'status-dot ' + (loginFailed ? 'error' : s.monitor_status);
+    text.textContent = loginFailed ? '未登录，请扫码登录' : ({
       running: '运行中', checking: '检查中…', starting: '启动中…',
       stopped: '已停止', error: '异常',
-    }[s.monitor_status] || s.monitor_status;
+    }[s.monitor_status] || s.monitor_status);
     if (s.monitor_status === 'checking' && s.current_keyword) {
       text.textContent = `正在检查: ${s.current_keyword}`;
     }
@@ -667,12 +668,6 @@ async function editBarkTarget(id) {
   const t = list.find((x) => x.id === id);
   if (!t) return;
   editingBarkId = id;
-  // 需要原始 Key 才能回显，从后端获取
-  try {
-    // 直接用完整列表的后端数据（bark_key 在响应里，页面展示用脱敏）
-    // 但 API 默认返回脱敏，这里需要完整 Key：重新请求一次明细接口没有，改用直接展示完整 key 的接口
-    // 简化：后端 GET 已返回 bark_key 完整值，前端直接用
-  } catch (e) {}
   $('#bark-edit-label').value = t.label || '';
   $('#bark-edit-server').value = t.server || 'https://api.day.app';
   // Key 只返回脱敏值；留空表示编辑时保持原 Key 不变。
@@ -712,7 +707,6 @@ $('#bark-edit-form').addEventListener('submit', async (e) => {
     server: $('#bark-edit-server').value.trim() || 'https://api.day.app',
     bark_key: $('#bark-edit-key').value.trim(),
   };
-  if (!payload.bark_key) { toast('Bark Key 不能为空', true); return; }
   try {
     await api('/api/bark-targets/' + editingBarkId, {
       method: 'PUT',

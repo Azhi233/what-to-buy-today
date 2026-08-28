@@ -116,7 +116,6 @@ def parse_price_extended(text: str, price_num: str = "", price_dec: str = "",
         # 万元缩写只能在有量级证据时启用：显式“万”或标题/监控上限支持万元级。
         # 仅凭 number+decimal 无法区分 3.5 元配件和 3.5 万元设备，默认按字面价格。
         explicit_wan = "万" in (text or "") or "万" in (title or "")
-        scale_supported = max_price >= 10000 if max_price else False
         plausible_wan = max_price > 0 and wan * 10000 <= max_price * 3
         # 没有单位时，万元候选值还必须与监控上限处于同一数量级。
         if not explicit_wan and max_price > 0 and wan * 10000 > max_price * 0.9:

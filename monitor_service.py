@@ -14,7 +14,7 @@ from datetime import datetime
 from config import (MIN_SELLER_CREDIT, MONITOR_ITEMS, MONITOR_SETTINGS, SCAM_RULES,
                     STRICT_UNKNOWN_CREDIT)
 from database import Database, parse_exclude_keywords
-from monitor import GoofishMonitor, credit_score, evaluate_item, filter_items
+from monitor import GoofishMonitor, evaluate_item
 from notifier import NotifierManager
 
 logger = logging.getLogger(__name__)
