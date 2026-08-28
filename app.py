@@ -327,6 +327,78 @@ def api_test_notify():
 #  设置与运行控制
 # ─────────────────────────────────────────────
 
+@app.route("/api/onboarding/status")
+def api_onboarding_status():
+    """新用户引导状态：首次使用（未配通知/无商品）时前端弹出引导。"""
+    from config import PUSHPLUS_CONFIG, SMTP_CONFIG, TELEGRAM_CONFIG
+
+    bark_ok = any(r["enabled"] and r["bark_key"] for r in db.get_bark_targets())
+    smtp_db = (db.get_channel_config().get("smtp") or {})
+    smtp_ok = bool(smtp_db.get("enabled") and smtp_db.get("host") and smtp_db.get("user")
+                   and smtp_db.get("password") and smtp_db.get("to"))
+    if not smtp_ok:
+        smtp_ok = bool(SMTP_CONFIG.get("enabled") and SMTP_CONFIG.get("host")
+                       and SMTP_CONFIG.get("user") and SMTP_CONFIG.get("password")
+                       and SMTP_CONFIG.get("to"))
+    pushplus_ok = bool(PUSHPLUS_CONFIG.get("enabled") and PUSHPLUS_CONFIG.get("token"))
+    tg_ok = bool(TELEGRAM_CONFIG.get("enabled") and TELEGRAM_CONFIG.get("bot_token")
+                 and TELEGRAM_CONFIG.get("chat_id"))
+    return jsonify({
+        "need_notify": not (bark_ok or smtp_ok or pushplus_ok or tg_ok),
+        "need_product": db.count_products() == 0,
+    })
+
+
+@app.route("/api/channel-config", methods=["GET"])
+def api_get_channel_config():
+    """读取通知渠道配置（密码脱敏）。"""
+    from config import SMTP_CONFIG
+
+    smtp = dict(SMTP_CONFIG)
+    smtp.update((db.get_channel_config().get("smtp") or {}))
+    return jsonify({"smtp": {
+        "enabled": bool(smtp.get("enabled")),
+        "host": smtp.get("host", ""),
+        "port": smtp.get("port", 465),
+        "user": smtp.get("user", ""),
+        "password_set": bool(smtp.get("password")),
+        "to": smtp.get("to", ""),
+    }})
+
+
+@app.route("/api/channel-config", methods=["POST"])
+def api_set_channel_config():
+    """保存通知渠道配置（SMTP）。只接收修改的字段，密码留空表示保持原值。"""
+    data = request.get_json(silent=True) or {}
+    smtp_in = data.get("smtp") or {}
+    host = (smtp_in.get("host") or "").strip()
+    user = (smtp_in.get("user") or "").strip()
+    to = (smtp_in.get("to") or "").strip()
+    if host:
+        if not user or not to:
+            return jsonify({"ok": False, "error": "SMTP 需填写邮箱账号与收件人"}), 400
+        old = db.get_channel_config().get("smtp") or {}
+        password = (smtp_in.get("password") or "").strip() or old.get("password", "")
+        if not password:
+            return jsonify({"ok": False, "error": "SMTP 需填写授权码（密码）"}), 400
+        try:
+            port = int(smtp_in.get("port") or old.get("port", 465))
+        except (TypeError, ValueError):
+            port = 465
+        cfg = db.get_channel_config()
+        cfg["smtp"] = {
+            "enabled": 1, "host": host, "port": port,
+            "user": user, "password": password, "to": to,
+        }
+        db.set_channel_config(cfg)
+        return jsonify({"ok": True})
+    # host 为空 = 清除 SMTP 配置
+    cfg = db.get_channel_config()
+    cfg["smtp"] = {"enabled": 0, "host": "", "port": 465, "user": "", "password": "", "to": ""}
+    db.set_channel_config(cfg)
+    return jsonify({"ok": True})
+
+
 @app.route("/api/settings", methods=["GET"])
 def api_get_settings():
     from config import BARK_CONFIG, PUSHPLUS_CONFIG, SMTP_CONFIG, TELEGRAM_CONFIG

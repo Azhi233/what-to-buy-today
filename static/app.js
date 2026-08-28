@@ -726,6 +726,114 @@ window.toggleBarkTarget = toggleBarkTarget;
 window.deleteBarkTarget = deleteBarkTarget;
 window.testBarkTarget = testBarkTarget;
 
+/* ───────── 新用户引导（防呆）───────── */
+async function checkOnboarding() {
+  let status;
+  try {
+    status = await api('/api/onboarding/status');
+  } catch (e) {
+    return; // 后端不可用时跳过引导
+  }
+  if (!status.need_notify && !status.need_product) return;
+  $('#onboarding').hidden = false;
+  // 只需要配商品时，直接进入第 2 步
+  if (!status.need_notify && status.need_product) {
+    $('#ob-step-notify').hidden = true;
+    $('#ob-step-product').hidden = false;
+  }
+}
+
+function closeOnboarding() {
+  $('#onboarding').hidden = true;
+}
+
+async function obSaveNotify() {
+  const barkKey = $('#ob-bark-key').value.trim();
+  const smtpHost = $('#ob-smtp-host').value.trim();
+  if (!barkKey && !smtpHost) {
+    toast('请填写 Bark Key 或邮件 SMTP 配置（或点"跳过"）', true);
+    return;
+  }
+  try {
+    if (barkKey) {
+      const r = await api('/api/bark-targets', {
+        method: 'POST',
+        body: JSON.stringify({
+          label: '默认',
+          server: $('#ob-bark-server').value.trim() || 'https://api.day.app',
+          bark_key: barkKey,
+        }),
+      });
+      if (!r.ok) throw new Error(r.error || 'Bark 添加失败');
+    }
+    if (smtpHost) {
+      const r = await api('/api/channel-config', {
+        method: 'POST',
+        body: JSON.stringify({
+          smtp: {
+            host: smtpHost,
+            port: $('#ob-smtp-port').value || 465,
+            user: $('#ob-smtp-user').value.trim(),
+            password: $('#ob-smtp-pass').value.trim(),
+            to: $('#ob-smtp-to').value.trim(),
+          },
+        }),
+      });
+      if (!r.ok) throw new Error(r.error || 'SMTP 保存失败');
+    }
+    toast('通知渠道已配置 ✅');
+    // 若产品也已就绪，直接完成引导；否则进入步骤 2
+    try {
+      const s = await api('/api/onboarding/status');
+      if (!s.need_product) { closeOnboarding(); loadSettings(); return; }
+    } catch (e) { /* 忽略，继续显示步骤 2 */ }
+    $('#ob-step-notify').hidden = true;
+    $('#ob-step-product').hidden = false;
+  } catch (e) {
+    toast('保存失败: ' + e.message, true);
+  }
+}
+
+async function obSaveProduct() {
+  const keyword = $('#ob-prod-keyword').value.trim();
+  const maxPrice = $('#ob-prod-max').value;
+  if (!keyword || !maxPrice) {
+    toast('请填写关键词和最高价格（或点"跳过"）', true);
+    return;
+  }
+  try {
+    const r = await api('/api/products', {
+      method: 'POST',
+      body: JSON.stringify({
+        keyword,
+        max_price: maxPrice,
+        min_price: $('#ob-prod-min').value || 0,
+        exclude_keywords: $('#ob-prod-exclude').value.trim(),
+        must_include: '',
+      }),
+    });
+    if (!r.ok) throw new Error(r.error || '添加失败');
+    toast('监控商品已添加 🎉');
+  } catch (e) {
+    toast('添加失败: ' + e.message, true);
+    return;
+  }
+  closeOnboarding();
+  loadProducts();
+  loadSettings();
+}
+
+$('#ob-notify-save').addEventListener('click', obSaveNotify);
+$('#ob-notify-skip').addEventListener('click', () => {
+  $('#ob-step-notify').hidden = true;
+  $('#ob-step-product').hidden = false;
+});
+$('#ob-prod-save').addEventListener('click', obSaveProduct);
+$('#ob-prod-skip').addEventListener('click', () => {
+  closeOnboarding();
+  loadProducts();
+});
+
 /* ───────── 初始化 ───────── */
 refreshStatus();
 loadOverview();
@@ -734,5 +842,6 @@ loadNotifications();
 loadDrops();
 loadSettings();
 loadRetention();
+checkOnboarding();
 
 setInterval(refreshStatus, 5000);

@@ -3,6 +3,7 @@ SQLite 数据存储层。
 存储：监控商品、发现的商品池、价格历史、降价记录、检查日志、通知记录、运行设置。
 """
 
+import json
 import os
 import sqlite3
 import threading
@@ -527,6 +528,21 @@ class Database:
             " ON CONFLICT(key) DO UPDATE SET value=excluded.value",
             (key, str(value)),
         )
+
+    def get_channel_config(self) -> dict:
+        """读取通知渠道配置（JSON），无配置时返回空 dict。"""
+        raw = self.get_setting("channel_config", "")
+        if not raw:
+            return {}
+        try:
+            cfg = json.loads(raw)
+            return cfg if isinstance(cfg, dict) else {}
+        except (ValueError, TypeError):
+            return {}
+
+    def set_channel_config(self, cfg: dict) -> None:
+        """保存通知渠道配置（JSON 序列化到 settings 表）。"""
+        self.set_setting("channel_config", json.dumps(cfg, ensure_ascii=False))
 
     # ─────────────────────────────────────
     #  统计

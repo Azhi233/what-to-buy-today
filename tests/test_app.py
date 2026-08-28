@@ -108,6 +108,68 @@ def test_export_prevents_csv_formula_injection():
         db.delete_product(pid)
 
 
+# ── 新用户引导 / 通知渠道配置 ─────────────────────────────
+
+def test_onboarding_status_empty_db():
+    """空数据库（无通知渠道、无商品）→ 引导两项都需要。"""
+    from app import db
+
+    client = app.test_client()
+    for p in db.get_products():
+        db.delete_product(p["id"])
+    for t in db.get_bark_targets():
+        db.delete_bark_target(t["id"])
+    db.set_channel_config({})
+    s = client.get("/api/onboarding/status").get_json()
+    assert s["need_notify"] is True
+    assert s["need_product"] is True
+
+
+def test_onboarding_status_clears_after_bark_and_product():
+    """配置 Bark + 添加商品后 → 引导不再出现（第二次进入不需要）。"""
+    from app import db
+
+    client = app.test_client()
+    tid = db.add_bark_target("测试", "https://api.day.app", "test_bark_key_1234567890", 1)
+    pid = db.add_product("引导测试商品", 1000, 100, "", 1, "")
+    try:
+        s = client.get("/api/onboarding/status").get_json()
+        assert s["need_notify"] is False
+        assert s["need_product"] is False
+    finally:
+        db.delete_bark_target(tid)
+        db.delete_product(pid)
+
+
+def test_channel_config_smtp_validation_and_masking():
+    """SMTP 配置：缺必填 400；保存后 GET 密码脱敏。"""
+    import json
+
+    from app import db
+
+    client = app.test_client()
+    # 缺收件人 → 400
+    r = client.post("/api/channel-config", json={"smtp": {
+        "host": "smtp.qq.com", "user": "a@qq.com", "password": "secret",
+    }})
+    assert r.status_code == 400
+    # 完整配置 → 200
+    r = client.post("/api/channel-config", json={"smtp": {
+        "host": "smtp.qq.com", "port": 465, "user": "a@qq.com",
+        "password": "smtp_secret_123", "to": "b@qq.com",
+    }})
+    assert r.status_code == 200
+    try:
+        cfg = client.get("/api/channel-config").get_json()
+        assert cfg["smtp"]["password_set"] is True
+        assert "smtp_secret_123" not in json.dumps(cfg)
+        # SMTP 配置生效后，引导不再提示通知
+        s = client.get("/api/onboarding/status").get_json()
+        assert s["need_notify"] is False
+    finally:
+        db.set_channel_config({})
+
+
 # ── S-07 / S-04 / 运行控制 回归 ───────────────────────────────
 
 def test_bark_target_key_is_masked():

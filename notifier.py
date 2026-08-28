@@ -228,10 +228,18 @@ class NotifierManager:
     def __init__(self, db=None):
         self.db = db
         self._bark_targets_cache = None  # 缓存 Bark 目标列表
+        # 邮件（SMTP）配置支持数据库覆盖（新用户引导可在线填写），未配置时回退 config.py
+        smtp_cfg = dict(SMTP_CONFIG)
+        if db is not None:
+            _db_smtp = db.get_channel_config().get("smtp") or {}
+            if _db_smtp.get("enabled") and _db_smtp.get("host"):
+                for k in ("enabled", "host", "port", "user", "password", "to"):
+                    if _db_smtp.get(k):
+                        smtp_cfg[k] = _db_smtp[k]
         self.channels = [
             ConsoleNotifier(),
             PushPlusNotifier(PUSHPLUS_CONFIG),
-            SMTPNotifier(SMTP_CONFIG),
+            SMTPNotifier(smtp_cfg),
             TelegramNotifier(TELEGRAM_CONFIG),
         ]
         # Bark 从数据库动态加载，不再从 config 硬编码

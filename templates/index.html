@@ -310,6 +310,92 @@
   </div>
 </div>
 
+<!-- ══════ 新用户引导 ══════ -->
+<div class="modal-overlay" id="onboarding" hidden>
+  <div class="modal onboarding">
+    <div class="onboarding-header">
+      <h3>欢迎使用闲鱼价格监控 👋</h3>
+      <p class="hint">两步完成初始配置（约 1 分钟），之后即可开始自动捡漏。</p>
+    </div>
+
+    <!-- 步骤 1：通知渠道 -->
+    <div class="onboarding-step" id="ob-step-notify">
+      <div class="onboarding-title"><span class="ob-num">1</span> 配置推送通知</div>
+      <p class="hint">发现低价商品 / 降价时会通过以下渠道提醒你，配置<b>任意一个</b>即可。</p>
+
+      <div class="ob-channel">
+        <div class="ob-channel-head">🐶 Bark 推送（推荐 · 手机实时提醒）</div>
+        <div class="setting-row">
+          <label>Bark Key</label>
+          <input id="ob-bark-key" placeholder="iPhone 安装 Bark App 后复制 Key">
+        </div>
+        <div class="setting-row">
+          <label>服务器</label>
+          <input id="ob-bark-server" value="https://api.day.app">
+        </div>
+        <div class="hint">没有 iPhone？可用下方邮件，或之后在"设置 → 通知渠道"补配。</div>
+      </div>
+
+      <details class="ob-channel">
+        <summary class="ob-channel-head">📧 邮件 SMTP（任意邮箱）</summary>
+        <div class="setting-row">
+          <label>SMTP 服务器</label>
+          <input id="ob-smtp-host" placeholder="如 smtp.qq.com">
+        </div>
+        <div class="setting-row">
+          <label>端口</label>
+          <input id="ob-smtp-port" type="number" value="465" style="max-width:120px">
+        </div>
+        <div class="setting-row">
+          <label>发件邮箱</label>
+          <input id="ob-smtp-user" placeholder="your@example.com">
+        </div>
+        <div class="setting-row">
+          <label>授权码</label>
+          <input id="ob-smtp-pass" type="password" placeholder="邮箱设置的 SMTP 授权码，非登录密码">
+        </div>
+        <div class="setting-row">
+          <label>收件人</label>
+          <input id="ob-smtp-to" placeholder="接收通知的邮箱">
+        </div>
+      </details>
+
+      <div class="ob-actions">
+        <button class="btn btn-primary" id="ob-notify-save">保存，下一步 →</button>
+        <button class="btn" id="ob-notify-skip">跳过（稍后配置）</button>
+      </div>
+    </div>
+
+    <!-- 步骤 2：添加监控商品 -->
+    <div class="onboarding-step" id="ob-step-product" hidden>
+      <div class="onboarding-title"><span class="ob-num">2</span> 添加第一个监控商品</div>
+      <p class="hint">输入你想捡漏的商品关键词和预算上限，出现低于预算的好货立即推送。</p>
+
+      <div class="setting-row">
+        <label>关键词</label>
+        <input id="ob-prod-keyword" placeholder="如：iPhone 15 Pro Max">
+      </div>
+      <div class="setting-row">
+        <label>最高价格 ¥</label>
+        <input id="ob-prod-max" type="number" min="1" step="0.01" placeholder="如 8000">
+      </div>
+      <div class="setting-row">
+        <label>最低价格 ¥（可选）</label>
+        <input id="ob-prod-min" type="number" min="0" step="0.01" placeholder="如 1000">
+      </div>
+      <div class="setting-row">
+        <label>排除关键词（可选）</label>
+        <input id="ob-prod-exclude" placeholder="换屏,拆机,模型机">
+      </div>
+
+      <div class="ob-actions">
+        <button class="btn btn-primary" id="ob-prod-save">添加并开始 🎉</button>
+        <button class="btn" id="ob-prod-skip">跳过（稍后添加）</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <script src="/static/echarts.min.js"></script>
 <script src="/static/app.js"></script>
 </body>
