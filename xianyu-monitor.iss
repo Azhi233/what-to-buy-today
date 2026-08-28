@@ -55,7 +55,6 @@ Source: "database.py"; DestDir: "{app}"; Flags: ignoreversion
 Source: "notifier.py"; DestDir: "{app}"; Flags: ignoreversion
 Source: "tray.py"; DestDir: "{app}"; Flags: ignoreversion
 Source: "requirements.txt"; DestDir: "{app}"; Flags: ignoreversion
-Source: "requirements-dev.txt"; DestDir: "{app}"; Flags: ignoreversion
 Source: ".env.example"; DestDir: "{app}"; Flags: ignoreversion
 Source: "templates\*"; DestDir: "{app}\templates"; Flags: recursesubdirs ignoreversion
 Source: "static\*"; DestDir: "{app}\static"; Flags: recursesubdirs ignoreversion

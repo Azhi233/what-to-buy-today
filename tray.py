@@ -22,10 +22,45 @@ import urllib.request
 from PIL import Image, ImageDraw
 import pystray
 
+# 触发 config._load_dotenv()：让 .env 中的 HOST/PORT 等环境变量在读取前生效，
+# 与 app.py / run.py 的配置来源保持一致
+import config  # noqa: F401
+
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DASHBOARD_URL = "http://127.0.0.1:5000"
+DASHBOARD_HOST = os.environ.get("HOST", "127.0.0.1")
+DASHBOARD_PORT = os.environ.get("PORT", "5000")
+DASHBOARD_URL = f"http://{DASHBOARD_HOST}:{DASHBOARD_PORT}"
 HEALTHZ_URL = DASHBOARD_URL + "/api/healthz"
 CREATE_NO_WINDOW = 0x08000000
+# 登录进程退出后等待 chromium 释放 profile 锁的秒数
+LOGIN_RESTART_DELAY = 3
+
+# 托盘单实例互斥体名（Windows 命名 Mutex）
+TRAY_MUTEX_NAME = "XianYuMonitorTrayMutex"
+
+
+def _acquire_single_instance() -> bool:
+    """Windows 命名互斥体单实例保护：重复启动托盘时静默退出。
+
+    防止 ONLOGON 任务与用户手动双击同时拉起两个托盘，
+    进而出现两个监控进程抢占端口/浏览器配置。
+    """
+    if sys.platform != "win32":
+        return True
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        kernel32 = ctypes.windll.kernel32
+        kernel32.CreateMutexW.argtypes = [wintypes.LPVOID, wintypes.BOOL, wintypes.LPCWSTR]
+        kernel32.CreateMutexW.restype = wintypes.HANDLE
+        handle = kernel32.CreateMutexW(None, False, TRAY_MUTEX_NAME)
+        if not handle:
+            return True
+        already_exists = kernel32.GetLastError() == 183  # ERROR_ALREADY_EXISTS
+        return not already_exists
+    except Exception:
+        return True
 
 _monitor_proc: subprocess.Popen | None = None
 
@@ -54,7 +89,7 @@ def _ensure_monitor_running() -> None:
         return
     _monitor_proc = subprocess.Popen(
         [_python(), os.path.join(BASE_DIR, "app.py"), "--no-browser",
-         "--host", "127.0.0.1"],
+         "--host", DASHBOARD_HOST, "--port", DASHBOARD_PORT],
         cwd=BASE_DIR,
         creationflags=CREATE_NO_WINDOW,
     )
@@ -95,7 +130,7 @@ def on_relogin(icon, item):
 def _restart_after_login(login_proc):
     """登录进程退出（成功/超时/关闭窗口）后，等待 profile 释放再恢复监控。"""
     login_proc.wait()
-    time.sleep(3)  # 等待 chromium 完全退出并释放 profile 锁
+    time.sleep(LOGIN_RESTART_DELAY)  # 等待 chromium 完全退出并释放 profile 锁
     _ensure_monitor_running()
 
 
@@ -119,6 +154,9 @@ def _create_icon_image() -> Image.Image:
 
 
 def main():
+    if not _acquire_single_instance():
+        print("托盘已在运行，本次启动已忽略（单实例保护）")
+        return
     # 拉起监控进程（幂等：已在运行则复用）
     _ensure_monitor_running()
 

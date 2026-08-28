@@ -68,6 +68,16 @@
 - 修复：托盘"重新登录"先暂停监控释放 profile → 登录窗口正常显示 → 登录完成自动恢复监控
 - `run.py --login` 增加兜底：检测到监控在运行自动暂停（手动执行登录时同样有效）
 
+### 代码审查加固（R8）
+- `config.py` 新增 `_load_dotenv()`：本地运行从项目根 `.env` 加载环境变量（不覆盖已有环境变量，Docker/systemd 由编排层注入）
+- `tray.py` 增加**单实例保护**（Windows 命名 Mutex）：重复启动托盘静默退出，防止双托盘/双监控抢占端口与浏览器配置
+- `tray.py` 通过 `import config` 触发 `.env` 加载，使 HOST/PORT 与 `app.py` 读取来源一致
+- `install.ps1`/`uninstall.ps1` 恢复 UTF-8 BOM：无 BOM 的 UTF-8 脚本在 Windows PowerShell 5.1 下中文按 ANSI 解码会破坏语法（修复了 `<#` 块注释头被误读的问题）
+- `monitor.py` 登录检测加固：仅以登录标识 cookie（`unb`/`tracknick`）为准，移除匿名会话也存在的 `last_u_xianyu_web`；API 检测要求返回体带用户数据，避免未登录误判"已登录"秒关扫码窗口
+- 新增 `clear_login_state()`：重新登录前清除历史登录态，保证二维码稳定显示
+- 可见模式（登录）显式指定 `--window-position=120,120`，覆盖 profile 中可能记住的屏外坐标
+- 托盘 URL 支持环境变量 `HOST`/`PORT` 覆盖；`.iss` 不再打包 `requirements-dev.txt`
+
 ## [1.0.0] - 2026-08-28
 
 ### 新增

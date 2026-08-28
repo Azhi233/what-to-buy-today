@@ -52,8 +52,8 @@ if ($keepData -match "^[Nn]") {
     Write-Host "    已删除数据与登录态" -ForegroundColor Green
 }
 
-$keepVenv = Read-Host "是否删除虚拟环境 .venv（约 300MB）？删除后重装需重新安装依赖。[Y/N]"
-if ($keepVenv -match "^[Yy]") {
+$deleteVenv = Read-Host "是否删除虚拟环境 .venv（约 300MB）？删除后重装需重新安装依赖。[Y/N]"
+if ($deleteVenv -match "^[Yy]") {
     Remove-Item "$APP_DIR\.venv" -Recurse -Force -ErrorAction SilentlyContinue
     Write-Host "    已删除虚拟环境" -ForegroundColor Green
 }

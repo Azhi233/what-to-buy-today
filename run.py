@@ -89,6 +89,8 @@ async def cmd_login(monitor):
     """登录模式：打开浏览器让用户扫码登录。"""
     logger.info("正在启动浏览器进行登录...")
     await monitor.start()
+    # 强制重新登录：清掉历史登录态，避免已登录时二维码页面被秒关
+    await monitor.clear_login_state()
     ok = await monitor.wait_for_login(timeout_minutes=10)
     await monitor.stop()
     if ok:

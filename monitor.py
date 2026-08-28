@@ -249,6 +249,10 @@ class GoofishMonitor:
         if hide_window:
             # 后台抓取：把窗口移到屏幕外（保持有头模式规避风控，但用户不可见）
             browser_args.append("--window-position=-32000,-32000")
+        else:
+            # 登录/扫码等需要可见窗口：显式指定可见位置，
+            # 覆盖 profile 中可能记住的屏外坐标（否则登录窗口会跑到屏幕外无法扫码）
+            browser_args.append("--window-position=120,120")
         self._context = await self._playwright.chromium.launch_persistent_context(
             self.user_data_dir,
             headless=headless,
@@ -409,7 +413,9 @@ class GoofishMonitor:
         try:
             cookies = await self._context.cookies()
             for c in cookies:
-                if c["name"] in ("unb", "tracknick", "last_u_xianyu_web") and c.get("value"):
+                # 仅 unb/tracknick 是可靠登录标识（登录成功后才会写入）。
+                # last_u_xianyu_web 是浏览追踪 cookie，匿名会话也会存在，会误判为已登录。
+                if c["name"] in ("unb", "tracknick") and c.get("value"):
                     return True
         except Exception as e:
             logger.debug(f"登录 cookie 检查失败: {e}")
@@ -440,10 +446,26 @@ class GoofishMonitor:
                 return False
             data = await resp.json()
             ret = data.get("ret", [])
-            return bool(ret and str(ret[0]).startswith("SUCCESS"))
+            if not (ret and str(ret[0]).startswith("SUCCESS")):
+                return False
+            # ret=SUCCESS 仅代表 mtop 调用成功，不代表已登录；
+            # 还需返回体带用户数据才算真正登录，避免未登录时误判。
+            return bool(data.get("data"))
         except Exception as e:
             logger.debug(f"API 登录检测失败: {e}")
             return False
+
+    async def clear_login_state(self) -> None:
+        """清除登录态 cookie，强制重新登录时显示二维码。
+
+        已登录状态下直接打开登录页，_poll_login_status 会立即命中历史 cookie
+        而秒关窗口；重新登录（切号/过期重登）前先清 cookie，保证二维码稳定显示。
+        """
+        try:
+            await self._context.clear_cookies()
+            logger.info("已清除登录态 cookie，等待重新扫码")
+        except Exception as e:
+            logger.warning(f"清除登录态失败: {e}")
 
     async def wait_for_login(self, timeout_minutes: int = 10):
         """
@@ -475,29 +497,12 @@ class GoofishMonitor:
     async def _poll_login_status(self, page: Page) -> bool:
         """
         轮询检测登录状态（不刷新页面）。
-          1. 登录标识 cookie（unb/tracknick 仅登录后出现）
-          2. mtop 登录用户 API
-          3. 页面 DOM 中登录链接是否消失
+
+        仅以登录标识 cookie（unb/tracknick，登录成功后才写入）为准。
+        不再使用 mtop API / DOM 链接判断：两者在未登录时会误报成功，
+        导致二维码页面还没扫就被判定"已登录"而秒关。
         """
-        # 方案一：登录标识 cookie
-        if await self._check_login_cookie():
-            return True
-
-        # 方案二：API 精确检测
-        if await self._check_login_via_api():
-            return True
-
-        # 方案三：页面 DOM 中"登录"链接是否消失
-        try:
-            login_links = await page.eval_on_selector_all(
-                "a[href*='/login']", "els => els.length"
-            )
-            if login_links == 0:
-                return True
-        except Exception:
-            pass
-
-        return False
+        return await self._check_login_cookie()
 
     # ─────────────────────────────────────────
     #  搜索与解析

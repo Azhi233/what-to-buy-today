@@ -22,6 +22,32 @@ import sys
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
+def _load_dotenv() -> None:
+    """从项目根目录 .env 加载环境变量（不覆盖已存在的环境变量）。
+
+    仅用于本地运行（Windows 安装版 / tray.py / python app.py）；
+    Docker（env_file）与 systemd（EnvironmentFile）由编排层注入，无需此函数。
+    """
+    env_file = os.path.join(BASE_DIR, ".env")
+    try:
+        with open(env_file, encoding="utf-8") as f:
+            for raw in f:
+                line = raw.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, _, value = line.partition("=")
+                key = key.strip()
+                value = value.strip().strip('"').strip("'")
+                if key and key not in os.environ:
+                    os.environ[key] = value
+    except OSError:
+        pass
+
+
+# 先加载 .env，再读取各环境变量（真实环境变量优先，.env 仅作本地兜底）
+_load_dotenv()
+
+
 def _env(name: str, default: str = "") -> str:
     """读取并清理环境变量；未设置时回退到本地文件值。"""
     return os.environ.get(name, default).strip()
