@@ -46,7 +46,9 @@ class BrowserDeadError(RuntimeError):
 
 
 def _is_browser_error(exc: Exception) -> bool:
-    """判断异常是否由浏览器/上下文失效引起。"""
+    """判断异常是否由浏览器/上下文失效引起（含本服务自抛的 BrowserDeadError）。"""
+    if isinstance(exc, BrowserDeadError):
+        return True
     from monitor import _is_browser_error as _monitor_browser_error
     return _monitor_browser_error(exc)
 
@@ -258,13 +260,13 @@ class MonitorService:
     async def _ensure_browser(self, monitor: GoofishMonitor):
         """检查浏览器是否存活，失效则抛出 BrowserDeadError 由外层重启。"""
         ctx = getattr(monitor, "_context", None)
-        if ctx is not None:
-            try:
-                if not ctx.is_closed():
-                    return
-            except Exception:
-                pass
-        raise BrowserDeadError("浏览器已失效，正在自动重启")
+        if ctx is None:
+            raise BrowserDeadError("浏览器已失效，正在自动重启")
+        try:
+            # BrowserContext 无 is_closed()，pages 是同步属性；访问即探测连接是否存活
+            _ = ctx.pages
+        except Exception:
+            raise BrowserDeadError("浏览器已失效，正在自动重启")
 
     # ── B2: 定时回收 ──
     async def _maybe_recycle_browser(self, monitor: GoofishMonitor):

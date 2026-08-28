@@ -204,6 +204,12 @@ class GoofishMonitor:
             args=[
                 "--disable-blink-features=AutomationControlled",
                 "--no-sandbox",
+                # 容器/无显示环境稳定性：--no-zygote 避开 crashpad 在容器的初始化崩溃；
+                # 其余为容器最小资源占用与显卡无头环境所需
+                "--no-zygote",
+                "--disable-crash-reporter",
+                "--disable-dev-shm-usage",
+                "--disable-gpu",
             ],
         )
         # 清除自动化标记，降低被识别为爬虫的风险
