@@ -86,7 +86,7 @@ def parse_price(text: str) -> Optional[float]:
 
 def parse_price_extended(text: str, price_num: str = "", price_dec: str = "",
                          wan_scale: bool = False, max_price: float = 0,
-                         title: str = "") -> tuple[Optional[float], bool]:
+                         min_price: float = 0, title: str = "") -> tuple[Optional[float], bool]:
     """
     从价格元素提取价格，识别闲鱼"万元缩写"。
 
@@ -121,7 +121,8 @@ def parse_price_extended(text: str, price_num: str = "", price_dec: str = "",
         if not explicit_wan and max_price > 0 and wan * 10000 > max_price * 0.9:
             plausible_wan = False
         # 显式万元单位优先；若没有单位，仅在监控量级合理时换算。
-        if wan_scale and 1 <= num_val < 10 and (explicit_wan or plausible_wan):
+        suspicious_literal = min_price > 0 and wan < min_price * 0.1
+        if wan_scale and 1 <= num_val < 10 and (explicit_wan or plausible_wan or suspicious_literal):
             return wan * 10000, True
         return wan, False
 
@@ -487,7 +488,8 @@ class GoofishMonitor:
             # wan_scale=True 时才把 "X.YY"(1<=X<10) 解释为万元，避免误伤真实低价商品。
             price, wan_flag = parse_price_extended(
                 card["price"], card["priceNum"], card["priceDec"],
-                wan_scale=wan_scale, max_price=max_price, title=card["title"]
+                wan_scale=wan_scale, max_price=max_price, min_price=min_price,
+                title=card["title"]
             )
             if price is None:
                 continue

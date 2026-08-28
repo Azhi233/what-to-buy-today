@@ -70,7 +70,7 @@ async function refreshStatus() {
     const s = await api('/api/status');
     const dot = $('#status-dot');
     const text = $('#status-text');
-    const loginFailed = s.login_ok === false;
+    const loginFailed = s.login_ok === false && ['running', 'checking', 'error'].includes(s.monitor_status);
     dot.className = 'status-dot ' + (loginFailed ? 'error' : s.monitor_status);
     text.textContent = loginFailed ? '未登录，请扫码登录' : ({
       running: '运行中', checking: '检查中…', starting: '启动中…',

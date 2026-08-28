@@ -89,7 +89,7 @@ class MonitorService:
         self.round_matches = 0
         self._round_count = 0
         self._last_browser_restart_at: float | None = None
-        self.login_ok = False
+        self.login_ok: bool | None = None
         self._login_failed = False
         self._zero_streak = 0
 

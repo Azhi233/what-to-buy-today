@@ -333,3 +333,52 @@ except Exception as e:
 1. 上表 7 项 + R3 的 `required` 属性，是第二轮**漏做**而非做错，请按原 R 编号的描述直接补齐。
 2. 补完后建议跑一遍 `python -m py_compile` 和 `python run.py --once`（可先用一个空结果关键词验证流程能跑完一轮再退出），并确认 `--stats` 输出来自 SQLite。
 3. R4 的两处残余（死代码 + 低价值监控万元污染统计）如无更高优先级可一并收尾。
+
+---
+
+# 第四轮复查（验证第三轮补漏是否落地）
+
+> 复查方式：核对第三轮提交 `192bf8f` 实际 diff + `py_compile`。
+> **结论：第三轮的 7 项补漏（R2/R3/R6/R7/R8/R9/R10）及 R3 的 `required`、R4 死代码，这次均已真正落地 ✅；但引入 1 个新回归（R11），另有 3 个小项。**
+
+## 本轮已确认落地 ✅
+
+| 项 | 验证 |
+|---|---|
+| R2 `--once` 竞态 | `run.py:104` 已改为 `while service.last_check_at is None and service._thread and service._thread.is_alive()`，不再依赖 status ✅ |
+| R3 Bark 编辑空 Key | `app.js` 已删空值拦截；`index.html:304` 已去掉 `required`、加 `placeholder="留空表示保持原 Key"` ✅ |
+| R6 `--stats` + 死代码 | `run.py` 已删 `check_once/_notify_product/run_monitor_forever` 与 `SeenStorage/StatsCollector/filter_items` 导入；`--stats` 改为 `db.get_stats()` ✅ |
+| R7 重复 `APP_STARTED_AT` | `app.py` 已删第一处 ✅ |
+| R8 test-notify 布尔 | `app.py` 已改 `{"ok": bool(ok), "channels": ok}` ✅ |
+| R9 未用导入 | `monitor_service.py:16` 已改 `from monitor import GoofishMonitor, evaluate_item` ✅ |
+| R10 `login_ok` 前端消费 | `app.js` `refreshStatus` 已按 `login_ok===false` 显示"未登录" ✅ |
+| R4 死代码 | `monitor.py` 已删 `scale_supported` ✅ |
+
+## 新引入的回归 ⚠️
+
+### - [x] R11 【中】`run.py --login` 使用空配置 `GoofishMonitor({})`，忽略 `MONITOR_SETTINGS`
+> ✅ 修复说明：登录模式恢复传入 `MONITOR_SETTINGS`，自定义浏览器配置、用户目录和 headless 设置现在与监控模式一致。
+- **文件**：`run.py:95`
+- **问题**：第三轮清理导入时，把 `GoofishMonitor(MONITOR_SETTINGS)` 改成了 `GoofishMonitor({})`，导致登录模式不再读取 `config.py` 的 `user_data_dir` / `headless` 等设置。
+- **影响**：若用户在 `MONITOR_SETTINGS` 里自定义了 `user_data_dir`（或 headless），登录态会保存到默认 `./browser_profile`，而监控服务读自定义目录 → **登录后监控仍判定"未登录"**；无显示环境时登录也不会按配置走 headless。
+- **建议**：恢复导入 `MONITOR_SETTINGS`，改回 `await cmd_login(GoofishMonitor(MONITOR_SETTINGS))`。
+
+## 遗留小项（低优先级）
+
+### - [x] R12 启动初期 `login_ok` 误报"未登录"
+> ✅ 修复说明：`login_ok` 改为三态值，启动未知阶段不再显示未登录；仅在有效运行状态下明确检测失败时提示扫码。
+- **文件**：`monitor_service.py`（`login_ok` 初始 `False`）+ `static/app.js` `refreshStatus`
+- **问题**：`login_ok` 在首次 `_check_round` 完成前一直是 `False`（浏览器启动需数秒），前端每 5s 轮询会在此期间显示"未登录，请扫码登录"+红色错误点。
+- **建议**：把 `login_ok` 改为三态（`None`=未知 / `True` / `False`），或仅在 `monitor_status` 为 `running`/`error` 且 `login_ok is False` 时才提示未登录。
+
+### - [x] R13 `run.py --stats` 输出为原始 dict
+> ✅ 修复说明：CLI 统计改为输出可读的汇总指标及最近通知，不再直接打印 Python 原始字典。
+- **文件**：`run.py:87`
+- **问题**：`print(db.get_stats())` 直接打印 Python 字典（含 `recent_notifications` 列表），可读性差，不如原来的格式化摘要。
+- **建议**：加一个小的格式化输出（如只打印 total_*/today_* 与最近 5 条通知）。
+
+### - [x] R14 R4 残余 2（低价值监控下真实万元仍被读为字面价）
+> ✅ 修复说明：价格解析增加最低价量级复核；当字面小数明显低于监控最低价时，将其作为万元候选处理，避免污染历史统计。
+- **文件**：`monitor.py` `parse_price_extended()`
+- **问题**：`max_price < 10000` 且无显式"万"时，真实"3.20万"商品仍被读成 `3.2` 元，污染价格历史的 min/avg。
+- **建议**：低优先级；若后续做，可在记录价格历史时对"明显低于 min_price 且疑似万元"的值做一次复核，或仅对进入统计的样本做异常过滤。

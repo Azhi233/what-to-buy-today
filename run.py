@@ -21,7 +21,7 @@ if sys.platform == "win32":
     except Exception:
         pass
 
-from config import MONITOR_ITEMS
+from config import MONITOR_ITEMS, MONITOR_SETTINGS
 from database import Database
 from monitor import GoofishMonitor
 from monitor_service import MonitorService
@@ -84,7 +84,17 @@ async def main():
 
     if args.stats:
         db = Database("monitor.db")
-        print(db.get_stats())
+        stats = db.get_stats()
+        print(f"已发现商品: {stats['total_items']}")
+        print(f"累计通知: {stats['total_notified']}")
+        print(f"今日通知: {stats['today_notified']}")
+        print(f"降价记录: {stats['total_drops']}")
+        print(f"检查轮次: {stats['total_checks']}")
+        print(f"监控商品: {stats['monitored_products']}")
+        if stats['recent_notifications']:
+            print("最近通知:")
+            for item in stats['recent_notifications']:
+                print(f"  [{item['time']}] ¥{item['price'] or 0:g} {item['title']} ({item['keyword']})")
         db.close()
         return
 
@@ -92,7 +102,7 @@ async def main():
         sys.exit(1)
 
     if args.login:
-        await cmd_login(GoofishMonitor({}))
+        await cmd_login(GoofishMonitor(MONITOR_SETTINGS))
         return
 
     db = Database("monitor.db")
