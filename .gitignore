@@ -1,0 +1,21 @@
+# 生成的数据
+data/
+browser_profile/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# 日志
+*.log
+
+# SQLite 数据库
+*.db
+
+# PID 文件
+dashboard.pid
+
+# Bark Key 等敏感信息（如 config.py 里的真实 Key 请勿提交）
+# 请将 config.py 中的 BARK_CONFIG.key / PUSHPLUS_CONFIG.token 等替换为占位符后再提交
+config.py

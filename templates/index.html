@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>闲鱼监控仪表盘</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="app">
+  <!-- 侧边栏 -->
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="brand-icon">🐟</div>
+      <div class="brand-text">
+        <div class="brand-title">闲鱼监控</div>
+        <div class="brand-sub">价格雷达</div>
+      </div>
+    </div>
+
+    <nav class="nav">
+      <a class="nav-item active" data-view="overview"><span class="nav-icon">📊</span>总览</a>
+      <a class="nav-item" data-view="products"><span class="nav-icon">📦</span>监控商品</a>
+      <a class="nav-item" data-view="analysis"><span class="nav-icon">📈</span>市场分析</a>
+      <a class="nav-item" data-view="drops"><span class="nav-icon">📉</span>降价记录</a>
+      <a class="nav-item" data-view="notifications"><span class="nav-icon">🔔</span>通知记录</a>
+      <a class="nav-item" data-view="settings"><span class="nav-icon">⚙️</span>设置</a>
+      <a class="nav-item" data-view="bark"><span class="nav-icon">🔔</span>Bark 推送</a>
+    </nav>
+
+    <div class="sidebar-status" id="sidebar-status">
+      <div class="status-dot" id="status-dot"></div>
+      <div>
+        <div class="status-text" id="status-text">未启动</div>
+        <div class="status-sub" id="status-sub">上次检查: --</div>
+      </div>
+    </div>
+  </aside>
+
+  <!-- 主内容区 -->
+  <main class="main">
+    <header class="topbar">
+      <h1 id="page-title">总览</h1>
+      <div class="topbar-actions">
+        <button class="btn btn-primary" id="btn-check-now">🔄 立即检查</button>
+        <button class="btn" id="btn-refresh">刷新数据</button>
+      </div>
+    </header>
+
+    <div class="content">
+      <!-- ========== 总览 ========== -->
+      <section class="view active" id="view-overview">
+        <div class="stat-grid">
+          <div class="stat-card"><div class="stat-value" id="stat-products">0</div><div class="stat-label">监控商品</div></div>
+          <div class="stat-card"><div class="stat-value" id="stat-total-items">0</div><div class="stat-label">已发现商品</div></div>
+          <div class="stat-card"><div class="stat-value" id="stat-today">0</div><div class="stat-label">今日通知</div></div>
+          <div class="stat-card"><div class="stat-value" id="stat-total-notified">0</div><div class="stat-label">累计通知</div></div>
+          <div class="stat-card"><div class="stat-value" id="stat-drops">0</div><div class="stat-label">降价记录</div></div>
+          <div class="stat-card"><div class="stat-value" id="stat-checks">0</div><div class="stat-label">检查轮次</div></div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-header">
+            <h3>最新发现</h3>
+            <a class="link" data-goto="products">管理监控商品 →</a>
+          </div>
+          <div class="table-wrap">
+            <table class="table" id="overview-table">
+              <thead><tr><th>价格</th><th>标题</th><th>关键词</th><th>地区</th><th>发现时间</th><th></th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- ========== 监控商品 ========== -->
+      <section class="view" id="view-products">
+        <div class="panel">
+          <div class="panel-header">
+            <h3>添加监控商品</h3>
+          </div>
+          <form class="product-form" id="product-form">
+            <div class="form-row">
+              <div class="form-group grow"><label>关键词</label><input id="pf-keyword" placeholder="如: 索尼 A7M4" required></div>
+              <div class="form-group"><label>最高价格 ¥</label><input id="pf-max" type="number" min="1" step="0.01" placeholder="13000" required></div>
+              <div class="form-group"><label>最低价格 ¥</label><input id="pf-min" type="number" min="0" step="0.01" placeholder="500"></div>
+              <div class="form-group"><label>排除关键词</label><input id="pf-exclude" placeholder="换屏,拆机,模型机"></div>
+            <div class="form-group"><label>必须包含词</label><input id="pf-must" placeholder="国行,256G（区分配置,可空）"></div>
+              <button type="submit" class="btn btn-primary form-submit">添加</button>
+            </div>
+          </form>
+        </div>
+
+        <div class="panel">
+          <div class="panel-header">
+            <h3>监控列表</h3>
+            <button class="btn btn-primary btn-sm" id="btn-add-product" onclick="openAddModal()">＋ 添加商品</button>
+          </div>
+          <div class="table-wrap">
+            <table class="table" id="products-table">
+              <thead><tr><th>状态</th><th>关键词</th><th>价格区间</th><th>排除关键词</th><th>必须包含</th><th>添加时间</th><th>操作</th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- ========== 市场分析 ========== -->
+      <section class="view" id="view-analysis">
+        <div class="analysis-toolbar">
+          <select id="analysis-keyword" class="select"></select>
+          <button class="btn" id="btn-analysis-refresh">刷新图表</button>
+        </div>
+
+        <div class="chart-grid">
+          <div class="panel">
+            <div class="panel-header"><h3>市场价格分布</h3><span class="hint">点击柱子筛选商品</span></div>
+            <div class="chart" id="chart-distribution"></div>
+          </div>
+          <div class="panel">
+            <div class="panel-header"><h3>价格走势（过滤后均价 / 中位数 / 均值）</h3><span class="hint">过滤后均价排除配件与无关配置</span></div>
+            <div class="chart" id="chart-trend"></div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-header">
+            <h3>商品列表 <span class="filter-badge" id="item-filter-badge" hidden></span></h3>
+            <span class="hint" id="items-count"></span>
+          </div>
+          <div class="table-wrap">
+            <table class="table" id="analysis-table">
+              <thead><tr><th>价格</th><th>标题</th><th>地区</th><th>信用</th><th>成色/状态</th><th>首次发现</th><th>是否已推送</th><th></th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- ========== 降价记录 ========== -->
+      <section class="view" id="view-drops">
+        <div class="panel">
+          <div class="panel-header"><h3>降价记录</h3></div>
+          <div class="table-wrap">
+            <table class="table" id="drops-table">
+              <thead><tr><th>时间</th><th>原价 → 现价</th><th>标题</th><th>关键词</th><th></th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- ========== 通知记录 ========== -->
+      <section class="view" id="view-notifications">
+        <div class="panel">
+          <div class="panel-header">
+            <h3>通知记录</h3>
+            <button class="btn btn-sm" id="btn-test-notify">发送测试通知</button>
+          </div>
+          <div class="table-wrap">
+            <table class="table" id="notifications-table">
+              <thead><tr><th>时间</th><th>价格</th><th>标题</th><th>关键词</th><th>渠道</th><th></th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- ========== 设置 ========== -->
+      <section class="view" id="view-settings">
+        <div class="settings-grid">
+          <div class="panel">
+            <div class="panel-header"><h3>监控设置</h3></div>
+            <div class="setting-row">
+              <label>检查间隔（分钟）</label>
+              <div class="setting-control">
+                <input type="number" id="set-interval" min="5" max="1440" step="1">
+                <button class="btn btn-sm" id="btn-save-interval">保存</button>
+              </div>
+              <span class="hint">建议 15-60 分钟，太频繁容易被风控</span>
+            </div>
+            <div class="setting-row">
+              <label>浏览器模式</label>
+              <div class="setting-control">
+                <select id="set-headless" class="select">
+                  <option value="false">有头模式（推荐，不易被风控）</option>
+                  <option value="true">无头模式（有风险）</option>
+                </select>
+                <button class="btn btn-sm" id="btn-save-headless">保存</button>
+              </div>
+              <span class="hint">修改后需重启程序生效</span>
+            </div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-header"><h3>通知渠道状态</h3></div>
+            <div class="channel-list" id="channel-list"></div>
+            <span class="hint">通知配置在 config.py 中修改，保存后重启生效</span>
+          </div>
+
+          <div class="panel">
+            <div class="panel-header"><h3>数据管理</h3></div>
+            <div class="setting-row">
+              <label>导出商品数据</label>
+              <button class="btn btn-sm" id="btn-export">导出 CSV</button>
+            </div>
+            <div class="setting-row danger">
+              <label>清空商品池</label>
+              <button class="btn btn-danger btn-sm" id="btn-clear-items">清空</button>
+              <span class="hint">删除所有已发现商品记录（不影响监控配置）</span>
+            </div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-header"><h3>运行信息</h3></div>
+            <div class="info-list" id="info-list"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ========== Bark 推送管理 ========== -->
+      <section class="view" id="view-bark">
+        <div class="panel">
+          <div class="panel-header">
+            <h3>添加 Bark 推送地址</h3>
+          </div>
+          <form id="bark-add-form">
+            <div class="form-row">
+              <div class="form-group grow"><label>备注名称</label><input id="bark-label" placeholder="如：主力机"></div>
+              <div class="form-group grow" style="min-width:240px"><label>Bark 服务器</label><input id="bark-server" placeholder="https://api.day.app" value="https://api.day.app"></div>
+              <div class="form-group grow" style="min-width:260px"><label>Bark Key</label><input id="bark-key" placeholder="粘贴 Bark Key，长度至少 10 位" required></div>
+              <button type="submit" class="btn btn-primary form-submit">添加推送地址</button>
+            </div>
+          </form>
+          <span class="hint">Key 可在 iPhone 上安装「Bark」App 后获取；支持自建 Bark 服务器，默认 https://api.day.app 一次会给所有启用地址推送。</span>
+        </div>
+        <div class="panel">
+          <div class="panel-header">
+            <h3>Bark 推送列表</h3>
+            <button class="btn btn-sm" id="btn-bark-refresh">刷新</button>
+          </div>
+          <div class="table-wrap">
+            <table class="table" id="bark-table">
+              <thead><tr><th>状态</th><th>备注</th><th>服务器</th><th>Key（脱敏）</th><th>添加时间</th><th>操作</th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+    </div>
+  </main>
+</div>
+
+<div class="toast" id="toast"></div>
+<div class="modal-overlay" id="modal" hidden>
+  <div class="modal">
+    <h3 id="modal-title">编辑商品</h3>
+    <form id="modal-form">
+      <div class="form-group"><label>关键词</label><input id="me-keyword" required></div>
+      <div class="form-row">
+        <div class="form-group"><label>最高价格 ¥</label><input id="me-max" type="number" min="1" step="0.01" required></div>
+        <div class="form-group"><label>最低价格 ¥</label><input id="me-min" type="number" min="0" step="0.01"></div>
+      </div>
+      <div class="form-group"><label>排除关键词</label><input id="me-exclude" placeholder="换屏,拆机,模型机"></div>
+      <div class="form-group"><label>必须包含词（区分配置/正品，可空）</label><input id="me-must" placeholder="国行,256G"></div>
+      <div class="modal-actions">
+        <button type="button" class="btn" id="modal-cancel">取消</button>
+        <button type="submit" class="btn btn-primary">保存</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div class="modal-overlay" id="bark-edit-modal" hidden>
+  <div class="modal">
+    <h3>编辑 Bark 推送地址</h3>
+    <form id="bark-edit-form">
+      <div class="form-group"><label>备注名称</label><input id="bark-edit-label" placeholder="如：主力机"></div>
+      <div class="form-group"><label>Bark 服务器</label><input id="bark-edit-server" placeholder="https://api.day.app"></div>
+      <div class="form-group"><label>Bark Key</label><input id="bark-edit-key" required></div>
+      <div class="modal-actions">
+        <button type="button" class="btn" id="bark-edit-cancel">取消</button>
+        <button type="submit" class="btn btn-primary">保存</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<script src="/static/echarts.min.js"></script>
+<script src="/static/app.js"></script>
+</body>
+</html>

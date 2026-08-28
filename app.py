@@ -1,0 +1,596 @@
+"""
+闲鱼监控仪表盘 - Web 界面入口
+================================
+用法：
+  python app.py               # 启动仪表盘（自动打开浏览器）
+  python app.py --no-browser  # 启动但不自动打开浏览器
+  python app.py --port 8080   # 指定端口
+================================
+浏览器访问 http://127.0.0.1:5000 即可使用仪表盘。
+"""
+
+import argparse
+import ctypes
+import logging
+import os
+import sys
+import threading
+import time
+import webbrowser
+from datetime import datetime
+
+# Windows 控制台编码修复
+if sys.platform == "win32":
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
+from flask import Flask, jsonify, render_template, request
+
+from config import MONITOR_SETTINGS
+from database import Database, parse_exclude_keywords
+from monitor_service import MonitorService, build_monitor_settings, seed_products_from_config
+from notifier import BarkNotifier, NotifierManager
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+    handlers=[
+        logging.StreamHandler(sys.stdout),
+        logging.FileHandler("dashboard.log", encoding="utf-8"),
+    ],
+)
+logger = logging.getLogger("dashboard")
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DB_PATH = os.path.join(BASE_DIR, "monitor.db")
+
+db = Database(DB_PATH)
+db.seed_bark_from_config()
+notifier = NotifierManager(db)
+service = MonitorService(db, notifier)
+
+app = Flask(__name__, static_folder="static", template_folder="templates")
+
+
+# 本地开发环境禁用静态文件缓存，避免浏览器加载旧版 JS/CSS 导致接口不匹配
+@app.after_request
+def no_cache(resp):
+    resp.headers["Cache-Control"] = "no-store, max-age=0"
+    return resp
+
+
+# ─────────────────────────────────────────────
+#  页面
+# ─────────────────────────────────────────────
+
+@app.route("/")
+def index():
+    return render_template("index.html")
+
+
+# ─────────────────────────────────────────────
+#  状态与统计
+# ─────────────────────────────────────────────
+
+@app.route("/api/status")
+def api_status():
+    status = {
+        "monitor_status": service.status,
+        "current_keyword": service.current_keyword,
+        "last_check_at": _ts(service.last_check_at),
+        "next_check_at": _ts(service.next_check_at),
+        "last_error": service.last_error,
+        "round_items": service.round_items,
+        "round_matches": service.round_matches,
+        "interval_minutes": db.get_setting("interval_minutes", "30"),
+        "headless": build_monitor_settings(db).get("headless", False),
+        "login_ok": True,  # 由监控线程检测，这里仅返回运行状态
+    }
+    return jsonify(status)
+
+
+@app.route("/api/stats")
+def api_stats():
+    return jsonify(db.get_stats())
+
+
+# ─────────────────────────────────────────────
+#  监控商品 CRUD
+# ─────────────────────────────────────────────
+
+@app.route("/api/products")
+def api_products():
+    products = []
+    for row in db.get_products():
+        products.append({
+            "id": row["id"],
+            "keyword": row["keyword"],
+            "max_price": row["max_price"],
+            "min_price": row["min_price"],
+            "exclude_keywords": row["exclude_keywords"],
+            "must_include": row["must_include"] or "",
+            "enabled": bool(row["enabled"]),
+            "created_at": row["created_at"],
+        })
+    return jsonify(products)
+
+
+@app.route("/api/products", methods=["POST"])
+def api_add_product():
+    data = request.get_json(force=True)
+    keyword = (data.get("keyword") or "").strip()
+    if not keyword:
+        return jsonify({"ok": False, "error": "关键词不能为空"}), 400
+    try:
+        max_price = float(data.get("max_price", 0))
+        min_price = float(data.get("min_price", 0))
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "价格格式错误"}), 400
+    if max_price <= 0:
+        return jsonify({"ok": False, "error": "最高价格必须大于 0"}), 400
+    exclude = data.get("exclude_keywords", "") or ""
+    must_include = data.get("must_include", "") or ""
+    pid = db.add_product(keyword, max_price, min_price, exclude, 1, must_include)
+    return jsonify({"ok": True, "id": pid})
+
+
+@app.route("/api/products/<int:pid>", methods=["PUT"])
+def api_update_product(pid):
+    data = request.get_json(force=True)
+    keyword = (data.get("keyword") or "").strip()
+    if not keyword:
+        return jsonify({"ok": False, "error": "关键词不能为空"}), 400
+    try:
+        max_price = float(data.get("max_price", 0))
+        min_price = float(data.get("min_price", 0))
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "价格格式错误"}), 400
+    db.update_product(pid, keyword, max_price, min_price,
+                      data.get("exclude_keywords", "") or "",
+                      data.get("must_include", "") or "")
+    return jsonify({"ok": True})
+
+
+@app.route("/api/products/<int:pid>", methods=["DELETE"])
+def api_delete_product(pid):
+    db.delete_product(pid)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/products/<int:pid>/toggle", methods=["POST"])
+def api_toggle_product(pid):
+    enabled = db.toggle_product(pid)
+    return jsonify({"ok": True, "enabled": enabled})
+
+
+# ─────────────────────────────────────────────
+#  市场分析
+# ─────────────────────────────────────────────
+
+@app.route("/api/analysis")
+def api_analysis():
+    keyword = request.args.get("keyword", "")
+    if not keyword:
+        keywords = db.get_keywords() or [p["keyword"] for p in db.get_products()]
+        keyword = keywords[0] if keywords else ""
+        if not keyword:
+            return jsonify({"ok": False, "error": "暂无监控商品"})
+    if keyword == "all":
+        items = db.get_latest_items(limit=500)
+    else:
+        items = db.get_latest_items(keyword=keyword, limit=500)
+
+    data = {
+        "ok": True,
+        "keyword": keyword,
+        "items": [_item_json(r) for r in items],
+        "distribution": _calc_distribution([r["price"] for r in items]),
+        "trend": _calc_trend(db, keyword if keyword != "all" else ""),
+    }
+    return jsonify(data)
+
+
+@app.route("/api/price-changes")
+def api_price_changes():
+    rows = db.get_recent_price_changes(limit=100)
+    return jsonify([dict(r) for r in rows])
+
+
+# ─────────────────────────────────────────────
+#  通知记录
+# ─────────────────────────────────────────────
+
+@app.route("/api/notifications")
+def api_notifications():
+    rows = db.get_notifications(limit=200)
+    return jsonify([dict(r) for r in rows])
+
+
+@app.route("/api/checks")
+def api_checks():
+    rows = db.get_checks(limit=100)
+    return jsonify([dict(r) for r in rows])
+
+
+@app.route("/api/test-notify", methods=["POST"])
+def api_test_notify():
+    ok = notifier.send(
+        "闲鱼监控 - 测试通知",
+        f"这是一条测试推送，发送时间 {datetime.now().strftime('%H:%M:%S')}",
+        "",
+    )
+    return jsonify({"ok": ok, "channels": notifier.report_channels()})
+
+
+# ─────────────────────────────────────────────
+#  设置与运行控制
+# ─────────────────────────────────────────────
+
+@app.route("/api/settings", methods=["GET"])
+def api_get_settings():
+    from config import BARK_CONFIG, PUSHPLUS_CONFIG, SMTP_CONFIG, TELEGRAM_CONFIG
+    settings = {
+        "interval_minutes": db.get_setting("interval_minutes", str(MONITOR_SETTINGS.get("interval_minutes", 30))),
+        "headless": db.get_setting("headless", str(MONITOR_SETTINGS.get("headless", False))),
+        "data_dir": MONITOR_SETTINGS.get("data_dir", "./data"),
+        "user_data_dir": MONITOR_SETTINGS.get("user_data_dir", "./browser_profile"),
+        "channels": {
+            "bark": bool(BARK_CONFIG.get("enabled") and BARK_CONFIG.get("key")),
+            "pushplus": bool(PUSHPLUS_CONFIG.get("enabled") and PUSHPLUS_CONFIG.get("token")),
+            "smtp": bool(SMTP_CONFIG.get("enabled") and SMTP_CONFIG.get("host")
+                         and SMTP_CONFIG.get("user") and SMTP_CONFIG.get("password")
+                         and SMTP_CONFIG.get("to")),
+            "telegram": bool(TELEGRAM_CONFIG.get("enabled") and TELEGRAM_CONFIG.get("bot_token")
+                             and TELEGRAM_CONFIG.get("chat_id")),
+        },
+    }
+    return jsonify(settings)
+
+
+@app.route("/api/settings", methods=["POST"])
+def api_set_settings():
+    data = request.get_json(force=True)
+    if "interval_minutes" in data:
+        try:
+            val = max(5, int(data["interval_minutes"]))
+            db.set_setting("interval_minutes", str(val))
+        except (TypeError, ValueError):
+            return jsonify({"ok": False, "error": "间隔时间格式错误"}), 400
+    if "headless" in data:
+        db.set_setting("headless", "true" if data["headless"] else "false")
+    return jsonify({"ok": True})
+
+
+@app.route("/api/control", methods=["POST"])
+def api_control():
+    action = (request.get_json(force=True) or {}).get("action", "")
+    if action == "start":
+        service.start()
+    elif action == "stop":
+        service.stop()
+    elif action == "check_now":
+        service.trigger_check()
+    else:
+        return jsonify({"ok": False, "error": "未知操作"}), 400
+    return jsonify({"ok": True})
+
+
+@app.route("/api/export")
+def api_export():
+    """导出商品数据为 CSV。"""
+    import csv
+    import io
+    from flask import Response
+
+    keyword = request.args.get("keyword", "")
+    items = db.get_latest_items(keyword=keyword or None, limit=5000)
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["item_id", "keyword", "title", "price", "url", "location",
+                     "status", "seller_credit", "risk_flags", "notified",
+                     "first_seen", "last_seen"])
+    for r in items:
+        writer.writerow([r["item_id"], r["keyword"], r["title"], r["price"],
+                         r["url"], r["location"], r["status"],
+                         r["seller_credit"] or "", r["risk_flags"] or "",
+                         1 if r["notified"] else 0, r["first_seen"], r["last_seen"]])
+
+    filename = f"xianyu_items_{keyword or 'all'}.csv"
+    return Response(
+        "\ufeff" + output.getvalue(),  # BOM 让 Excel 正确识别 UTF-8
+        mimetype="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )
+
+
+@app.route("/api/bark-targets", methods=["GET"])
+def api_bark_targets():
+    rows = db.get_bark_targets()
+    return jsonify([{
+        "id": r["id"],
+        "label": r["label"] or "",
+        "server": r["server"],
+        "bark_key": r["bark_key"],
+        "bark_key_masked": (r["bark_key"][:4] + "****" + r["bark_key"][-2:]) if len(r["bark_key"]) > 6 else "****",
+        "enabled": bool(r["enabled"]),
+        "created_at": r["created_at"],
+    } for r in rows])
+
+
+@app.route("/api/bark-targets", methods=["POST"])
+def api_add_bark_target():
+    data = request.get_json(force=True) or {}
+    label = (data.get("label") or "").strip()
+    server = (data.get("server") or "https://api.day.app").strip().rstrip("/") or "https://api.day.app"
+    bark_key = (data.get("bark_key") or "").strip()
+    if not bark_key:
+        return jsonify({"ok": False, "error": "Bark Key 不能为空"}), 400
+    # 基本校验：Bark Key 应该是字母数字混合字符串，长度至少 10
+    if len(bark_key) < 10:
+        return jsonify({"ok": False, "error": "Bark Key 长度过短，请检查"}), 400
+    tid = db.add_bark_target(label, server, bark_key, 1)
+    return jsonify({"ok": True, "id": tid})
+
+
+@app.route("/api/bark-targets/<int:tid>", methods=["PUT"])
+def api_update_bark_target(tid):
+    row = db.get_bark_target(tid)
+    if not row:
+        return jsonify({"ok": False, "error": "未找到该推送目标"}), 404
+    data = request.get_json(force=True) or {}
+    label = (data.get("label") or "").strip()
+    server = (data.get("server") or row["server"]).strip().rstrip("/") or "https://api.day.app"
+    bark_key = (data.get("bark_key") or row["bark_key"]).strip()
+    if not bark_key:
+        return jsonify({"ok": False, "error": "Bark Key 不能为空"}), 400
+    db.update_bark_target(tid, label, server, bark_key)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/bark-targets/<int:tid>", methods=["DELETE"])
+def api_delete_bark_target(tid):
+    row = db.get_bark_target(tid)
+    if not row:
+        return jsonify({"ok": False, "error": "未找到该推送目标"}), 404
+    db.delete_bark_target(tid)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/bark-targets/<int:tid>/toggle", methods=["POST"])
+def api_toggle_bark_target(tid):
+    enabled = db.toggle_bark_target(tid)
+    return jsonify({"ok": True, "enabled": enabled})
+
+
+@app.route("/api/bark-targets/<int:tid>/test", methods=["POST"])
+def api_test_bark_target(tid):
+    row = db.get_bark_target(tid)
+    if not row:
+        return jsonify({"ok": False, "error": "未找到该推送目标"}), 404
+    bn = BarkNotifier(server=row["server"], key=row["bark_key"], label=row["label"])
+    ok = bn.send("闲鱼监控 - Bark 测试", f"这是一条测试推送 ({row['label'] or row['bark_key'][:6]})", "")
+    return jsonify({"ok": ok, "label": row["label"] or row["bark_key"][:6]})
+
+
+@app.route("/api/clear-items", methods=["POST"])
+def api_clear_items():
+    db._execute("DELETE FROM items")
+    db._execute("DELETE FROM price_history")
+    return jsonify({"ok": True})
+
+
+# ─────────────────────────────────────────────
+#  工具函数
+# ─────────────────────────────────────────────
+
+def _ts(epoch: float | None):
+    if not epoch:
+        return None
+    return datetime.fromtimestamp(epoch).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _item_json(row) -> dict:
+    return {
+        "item_id": row["item_id"],
+        "keyword": row["keyword"],
+        "title": row["title"],
+        "price": row["price"],
+        "url": row["url"],
+        "image": row["image"] or "",
+        "location": row["location"] or "",
+        "status": row["status"] or "",
+        "seller_credit": row["seller_credit"] or "",
+        "risk_flags": row["risk_flags"] or "",
+        "notified": bool(row["notified"]),
+        "first_seen": row["first_seen"],
+        "last_seen": row["last_seen"],
+    }
+
+
+def _calc_distribution(prices: list[float], bins: int = 12) -> list[dict]:
+    """
+    计算价格分布（直方图数据）。
+    使用更细的步长以展示中高价商品的细微差价：
+      - 先截掉可能污染分布的极端值（IQR 方法）
+      - 步长依据价格量级选择（万元级商品用几百元一档，而非粗分）
+    """
+    if not prices:
+        return []
+    prices = sorted(p for p in prices if p and p > 0)
+    if not prices:
+        return []
+    low, high = prices[0], prices[-1]
+    if high <= low:
+        return [{"from": low, "to": high, "count": len(prices)}]
+
+    # 用 IQR 剔除极端 outliers，聚焦主流价格带，避免单根柱子吞掉万元级差价
+    q1 = prices[len(prices) // 4]
+    q3 = prices[3 * len(prices) // 4]
+    iqr = q3 - q1
+    core_low = max(low, q1 - 1.5 * iqr)
+    core_high = min(high, q3 + 1.5 * iqr)
+    core = [p for p in prices if core_low <= p <= core_high]
+    if len(core) < 3:  # 数据太少就退回全量
+        core = prices
+    if not core:
+        core = prices
+
+    c_low, c_high = core[0], core[-1]
+    span = c_high - c_low
+    # 依据价格量级选择合理的细化步长：万元级用几百，千元级用几十
+    def nice_step(raw: float) -> float:
+        if raw <= 0:
+            return 10
+        # 找到不小于 raw 的"好看"步长（1/2/2.5/5 × 10^n 的倍数）
+        base = 10 ** (len(str(int(raw))) - 1)
+        for factor in (1, 2, 2.5, 5, 10):
+            if base * factor >= raw:
+                return base * factor
+        return base * 10
+
+    step = nice_step(span / bins)
+
+    # 分桶
+    edges = []
+    cur = (c_low // step) * step
+    while cur < c_high + step:
+        edges.append(cur)
+        cur += step
+
+    result = []
+    for i in range(len(edges) - 1):
+        lo, hi = edges[i], edges[i + 1]
+        count = sum(1 for p in core if lo <= p < hi)
+        if count:
+            result.append({"from": lo, "to": hi, "count": count})
+    return result
+
+
+def _calc_trend(db: Database, keyword: str, limit: int = 100) -> list[dict]:
+    """计算价格走势（按检查时间聚合）。"""
+    if keyword:
+        rows = db.get_price_history(keyword, limit=limit)
+    else:
+        # 全部关键词：按时间聚合
+        rows = db._query(
+            "SELECT * FROM price_history ORDER BY id DESC LIMIT ?", (limit,)
+        )
+    points = []
+    for r in reversed(rows):
+        points.append({
+            "time": r["check_time"],
+            "keyword": r["keyword"],
+            "median": r["median_price"],
+            "avg": r["avg_price"],
+            "filtered_avg": r["filtered_avg"],
+            "core_count": r["core_count"],
+            "min": r["min_price"],
+            "max": r["max_price"],
+            "count": r["item_count"],
+        })
+    return points
+
+
+def _write_pid():
+    """写入进程 PID 文件，便于管理。"""
+    try:
+        with open(os.path.join(BASE_DIR, "dashboard.pid"), "w") as f:
+            f.write(str(os.getpid()))
+    except Exception:
+        pass
+
+
+def _remove_pid():
+    try:
+        os.remove(os.path.join(BASE_DIR, "dashboard.pid"))
+    except OSError:
+        pass
+
+
+def _pid_alive(pid: int) -> bool:
+    """检查 PID 对应的进程是否存活。"""
+    if pid <= 0:
+        return False
+    if sys.platform == "win32":
+        PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+        handle = ctypes.windll.kernel32.OpenProcess(
+            PROCESS_QUERY_LIMITED_INFORMATION, False, pid
+        )
+        if not handle:
+            return False
+        ctypes.windll.kernel32.CloseHandle(handle)
+        return True
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return False
+    return True
+
+
+def _check_single_instance() -> bool:
+    """
+    单实例保护：若已有仪表盘实例在运行则返回 False。
+    防止重复启动导致多个进程抢占端口、页面缓存错乱。
+    """
+    pid_file = os.path.join(BASE_DIR, "dashboard.pid")
+    if os.path.exists(pid_file):
+        try:
+            with open(pid_file) as f:
+                old_pid = int(f.read().strip())
+            if _pid_alive(old_pid):
+                print(f"⚠️  仪表盘已在运行 (PID {old_pid})，请勿重复启动")
+                print("   如需重启：先停止旧进程，再运行 python app.py")
+                return False
+        except (ValueError, OSError):
+            pass
+        _remove_pid()
+    return True
+
+
+def main():
+    parser = argparse.ArgumentParser(description="闲鱼监控仪表盘")
+    parser.add_argument("--port", type=int, default=5000)
+    parser.add_argument("--no-browser", action="store_true", help="不自动打开浏览器")
+    args = parser.parse_args()
+
+    if not _check_single_instance():
+        return
+
+    # 首次运行：从 config.py 同步监控商品
+    seeded = seed_products_from_config(db)
+    if seeded:
+        logger.info(f"已从 config.py 同步 {seeded} 个监控商品")
+
+    # 启动监控服务（后台线程）
+    service.start()
+
+    url = f"http://127.0.0.1:{args.port}"
+    print("=" * 55)
+    print("  闲鱼监控仪表盘已启动")
+    print(f"  地址: {url}")
+    print("  监控状态: 运行中 (浏览器窗口请保持打开，可最小化)")
+    print("  按 Ctrl+C 停止")
+    print("=" * 55)
+
+    _write_pid()
+
+    if not args.no_browser:
+        threading.Timer(1.2, lambda: webbrowser.open(url)).start()
+
+    try:
+        app.run(host="127.0.0.1", port=args.port, debug=False, use_reloader=False)
+    except KeyboardInterrupt:
+        print("\n正在停止监控服务...")
+    finally:
+        service.stop()
+        db.close()
+        _remove_pid()
+
+
+if __name__ == "__main__":
+    main()
