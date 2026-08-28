@@ -297,7 +297,11 @@ class Database:
         if rows:
             old = rows[0]
             is_new = False
-            price_dropped = old["price"] and price < old["price"]
+            old_price = old["price"] or 0
+            price_dropped = bool(
+                old_price > 0 and price < old_price
+                and (old_price - price >= 20 or (old_price - price) / old_price >= 0.05)
+            )
             self._execute(
                 "UPDATE items SET title=?, price=?, url=?, image=?, location=?, status=?,"
                 " seller_credit=?, risk_flags=?, keyword=?,"
@@ -423,10 +427,10 @@ class Database:
         stats = {}
         with self._lock:
             cur = self._conn.execute(
-                "DELETE FROM items WHERE julianday('now')-julianday(last_seen) > ?", (items_days,))
+                "DELETE FROM items WHERE julianday('now','localtime')-julianday(last_seen) > ?", (items_days,))
             stats["items_deleted"] = cur.rowcount
             cur = self._conn.execute(
-                "DELETE FROM price_history WHERE julianday('now')-julianday(check_time) > ?", (history_days,))
+                "DELETE FROM price_history WHERE julianday('now','localtime')-julianday(check_time) > ?", (history_days,))
             stats["history_deleted"] = cur.rowcount
             cur = self._conn.execute(
                 "DELETE FROM checks_log WHERE id NOT IN (SELECT id FROM checks_log ORDER BY id DESC LIMIT ?)",
@@ -515,7 +519,7 @@ def parse_exclude_keywords(raw: str) -> list[str]:
     """解析逗号/空格分隔的排除关键词列表。"""
     if not raw:
         return []
-    parts = raw.replace("，", ",").replace(" ", ",").split(",")
+    parts = raw.replace("，", ",").split(",")
     return [p.strip() for p in parts if p.strip()]
 
 

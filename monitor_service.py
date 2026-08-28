@@ -25,13 +25,8 @@ class BrowserDeadError(RuntimeError):
 
 def _is_browser_error(exc: Exception) -> bool:
     """判断异常是否由浏览器/上下文失效引起。"""
-    text = str(exc).lower()
-    return (
-        "browser has been closed" in text
-        or ("target page" in text and "closed" in text)
-        or "connection closed" in text
-        or "context or browser" in text
-    )
+    from monitor import _is_browser_error as _monitor_browser_error
+    return _monitor_browser_error(exc)
 
 
 def build_monitor_settings(db: Database) -> dict:
@@ -51,7 +46,7 @@ def build_monitor_settings(db: Database) -> dict:
 def seed_products_from_config(db: Database) -> int:
     """首次运行时，把 config.py 里的监控商品同步到数据库。"""
     existing = db.get_products()
-    if existing:
+    if existing or db.get_setting("products_seeded", "") == "1":
         return 0
     count = 0
     for item in MONITOR_ITEMS:
@@ -67,6 +62,7 @@ def seed_products_from_config(db: Database) -> int:
             enabled=1,
         )
         count += 1
+    db.set_setting("products_seeded", "1")
     return count
 
 
@@ -92,6 +88,9 @@ class MonitorService:
         self.round_matches = 0
         self._round_count = 0
         self._last_browser_restart_at: float | None = None
+        self.login_ok = False
+        self._login_failed = False
+        self._zero_streak = 0
 
     # ─────────────────────────────────────
     #  生命周期
@@ -168,7 +167,11 @@ class MonitorService:
                     restart_delay = min(restart_delay * 2, 120)
                     continue  # 立即重试本轮
 
-                interval = float(self.db.get_setting("interval_minutes", 30))
+                try:
+                    interval = float(self.db.get_setting("interval_minutes", 30))
+                except (TypeError, ValueError):
+                    interval = 30.0
+                    logger.warning("interval_minutes 无效，回退到 30 分钟")
                 # ±5分钟随机抖动，降低固定间隔的行为指纹
                 jitter = random.uniform(-5, 5)
                 effective = max(1, interval + jitter)
@@ -319,13 +322,16 @@ class MonitorService:
             await self._ensure_browser(monitor)
 
             # 登录检查（API 方式，不刷新页面）
-            if not await monitor.check_login_status():
+            self.login_ok = await monitor.check_login_status()
+            if not self.login_ok:
                 msg = "未检测到登录状态，请先运行 python run.py --login 扫码登录"
                 self.last_error = msg
                 self.status = "error"
+                self._login_failed = True
                 logger.error(msg)
                 self.db.log_check("*", "error", 0, 0, msg)
                 return
+            self._login_failed = False
 
             products = self.db.get_products(enabled_only=True)
             if not products:
@@ -351,7 +357,7 @@ class MonitorService:
         finally:
             self.current_keyword = ""
             self.last_check_at = time.time()
-            if exc is None:
+            if exc is None and not self._login_failed:
                 self.status = "running"
 
     async def _check_keyword(self, monitor: GoofishMonitor, product):
@@ -363,7 +369,7 @@ class MonitorService:
 
         items = await monitor.search(
             keyword,
-            max_price=max_price,       # 用于万元缩写修正校正
+            max_price=max_price,       # 用于万元缩写量级判断
             min_price=min_price,
             must_include=must_include,
         )
@@ -416,6 +422,7 @@ class MonitorService:
         for item in items:
             existing = self.db.get_item(item["item_id"])
             is_new = existing is None
+            verdict = {"pass": False, "hard": [], "warn": []}
 
             if is_new:
                 # 卖家信用 + 价格区间 + 排除词 + 必须包含 + 引流文案 综合评估
@@ -436,12 +443,31 @@ class MonitorService:
                 else:
                     filtered.append((item, verdict["hard"]))
             else:
-                # 已有商品保留原始风险标记，避免被覆盖
-                item["risk_flags"] = existing["risk_flags"] or ""
+                # 老商品每次降价也必须重新过硬校验，不能沿用首次入库时的结论。
+                verdict = evaluate_item(
+                    item,
+                    max_price=max_price,
+                    min_price=min_price,
+                    exclude_keywords=exclude_keywords,
+                    must_include=must_include,
+                    min_seller_credit=MIN_SELLER_CREDIT,
+                    median_price=median_price,
+                    scam_rules=SCAM_RULES,
+                )
+                # 保留已记录的风险说明；若当前重新评估发现警告则追加。
+                old_flags = existing["risk_flags"] or ""
+                current_flags = "；".join(verdict["warn"])
+                item["risk_flags"] = "；".join(dict.fromkeys(
+                    flag for flag in (old_flags + "；" + current_flags).split("；") if flag
+                ))
 
             result = self.db.upsert_item(item, keyword)
-            if result["price_dropped"]:
-                price_drop_notices.append(item)
+            if result["price_dropped"] and verdict["pass"]:
+                price_drop_notices.append(item) 
+            elif result["price_dropped"]:
+                logger.info(f"[{keyword}] 降价商品通过数据库更新，但因风险校验未通过而不推送: {item['item_id']}")
+            
+            # 新商品分支也需要保留 verdict，供降价判断结构保持一致。
 
         # 推送降价提醒
         for item in price_drop_notices:
@@ -465,7 +491,7 @@ class MonitorService:
             from notifier import BarkNotifier as _BN
             summary_title, summary_content = _BN.build_summary_payload(matches, keyword)
             # 复用统一发送（所有启用的渠道）；url 置空，摘要里提示看仪表盘
-            ok_list = self.notifier.send(summary_title, summary_content, "")
+            ok_list = await asyncio.to_thread(self.notifier.send, summary_title, summary_content, "")
             ok = bool(ok_list)
             for it in matches:
                 self.db.log_notification(it["item_id"], keyword, it["title"], it["price"], it.get("url",""), "推送(摘要)" if ok else "控制台(摘要)")
@@ -513,7 +539,7 @@ class MonitorService:
         if item.get("risk_flags"):
             content += f"⚠️ 注意: {item['risk_flags']}\n"
         url = item.get("url", "")
-        ok = self.notifier.send(title, content, url)
+        ok = bool(await asyncio.to_thread(self.notifier.send, title, content, url))
         self.db.log_notification(
             item["item_id"], keyword, item["title"], item["price"], url,
             "推送" if ok else "控制台",

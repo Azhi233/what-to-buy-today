@@ -270,6 +270,8 @@ class NotifierManager:
             try:
                 if channel.send(title, content, url):
                     name = type(channel).__name__
+                    if isinstance(channel, ConsoleNotifier):
+                        continue
                     if isinstance(channel, BarkNotifier):
                         name = f"Bark:{channel.display_name}"
                     success_channels.append(name)

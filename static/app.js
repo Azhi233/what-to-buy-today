@@ -448,7 +448,7 @@ async function loadDrops() {
         <td class="price"><s>${fmtPrice(c.old_price)}</s> → ${fmtPrice(c.new_price)}</td>
         <td title="${esc(c.title)}">${esc(c.title.slice(0, 40))}</td>
         <td>${esc(c.keyword)}</td>
-        <td>${c.item_id ? `<a class="item-link" href="https://www.goofish.com/item?id=${c.item_id}" target="_blank">打开 →</a>` : ''}</td>
+        <td>${c.item_id ? `<a class="item-link" href="https://www.goofish.com/item?id=${esc(c.item_id)}" target="_blank">打开 →</a>` : ''}</td>
       </tr>`).join('');
   } catch (e) {
     toast('加载降价记录失败: ' + e.message, true);
@@ -675,10 +675,8 @@ async function editBarkTarget(id) {
   } catch (e) {}
   $('#bark-edit-label').value = t.label || '';
   $('#bark-edit-server').value = t.server || 'https://api.day.app';
-  // API 返回的是完整 bark_key，前端直接用
-  const rawList = await api('/api/bark-targets');
-  const raw = rawList.find((x) => x.id === id);
-  $('#bark-edit-key').value = raw ? raw.bark_key : '';
+  // Key 只返回脱敏值；留空表示编辑时保持原 Key 不变。
+  $('#bark-edit-key').value = '';
   $('#bark-edit-modal').hidden = false;
 }
 

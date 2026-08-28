@@ -60,6 +60,7 @@ logger = logging.getLogger("dashboard")
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, "monitor.db")
+APP_STARTED_AT = time.time()
 
 db = Database(DB_PATH)
 db.seed_bark_from_config()
@@ -103,7 +104,7 @@ def api_status():
         "round_matches": service.round_matches,
         "interval_minutes": db.get_setting("interval_minutes", "30"),
         "headless": build_monitor_settings(db).get("headless", False),
-        "login_ok": True,  # 由监控线程检测，这里仅返回运行状态
+        "login_ok": service.login_ok,
     }
     return jsonify(status)
 
@@ -176,6 +177,8 @@ def api_add_product():
         return jsonify({"ok": False, "error": "价格格式错误"}), 400
     if max_price <= 0:
         return jsonify({"ok": False, "error": "最高价格必须大于 0"}), 400
+    if min_price < 0 or min_price > max_price:
+        return jsonify({"ok": False, "error": "最低价格必须在 0 到最高价格之间"}), 400
     exclude = data.get("exclude_keywords", "") or ""
     must_include = data.get("must_include", "") or ""
     pid = db.add_product(keyword, max_price, min_price, exclude, 1, must_include)
@@ -193,6 +196,10 @@ def api_update_product(pid):
         min_price = float(data.get("min_price", 0))
     except (TypeError, ValueError):
         return jsonify({"ok": False, "error": "价格格式错误"}), 400
+    if max_price <= 0:
+        return jsonify({"ok": False, "error": "最高价格必须大于 0"}), 400
+    if min_price < 0 or min_price > max_price:
+        return jsonify({"ok": False, "error": "最低价格必须在 0 到最高价格之间"}), 400
     db.update_product(pid, keyword, max_price, min_price,
                       data.get("exclude_keywords", "") or "",
                       data.get("must_include", "") or "")
@@ -359,7 +366,6 @@ def api_bark_targets():
         "id": r["id"],
         "label": r["label"] or "",
         "server": r["server"],
-        "bark_key": r["bark_key"],
         "bark_key_masked": (r["bark_key"][:4] + "****" + r["bark_key"][-2:]) if len(r["bark_key"]) > 6 else "****",
         "enabled": bool(r["enabled"]),
         "created_at": r["created_at"],
@@ -389,7 +395,7 @@ def api_update_bark_target(tid):
     data = request.get_json(force=True) or {}
     label = (data.get("label") or "").strip()
     server = (data.get("server") or row["server"]).strip().rstrip("/") or "https://api.day.app"
-    bark_key = (data.get("bark_key") or row["bark_key"]).strip()
+    bark_key = (data.get("bark_key") or "").strip() or row["bark_key"]
     if not bark_key:
         return jsonify({"ok": False, "error": "Bark Key 不能为空"}), 400
     db.update_bark_target(tid, label, server, bark_key)

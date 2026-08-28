@@ -31,6 +31,8 @@ from playwright.async_api import (
 logger = logging.getLogger(__name__)
 
 # 常见 UA 池，随机选择，模拟不同用户
+PRO_MODEL_WORDS = {"pro", "max", "plus", "mini", "ultra", "promax", "pro max"}
+
 USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
@@ -83,7 +85,8 @@ def parse_price(text: str) -> Optional[float]:
 
 
 def parse_price_extended(text: str, price_num: str = "", price_dec: str = "",
-                         wan_scale: bool = False) -> tuple[Optional[float], bool]:
+                         wan_scale: bool = False, max_price: float = 0,
+                         title: str = "") -> tuple[Optional[float], bool]:
     """
     从价格元素提取价格，识别闲鱼"万元缩写"。
 
@@ -110,14 +113,27 @@ def parse_price_extended(text: str, price_num: str = "", price_dec: str = "",
             wan = num_val + float(frac)
         except (ValueError, TypeError):
             return None, False
-        # 万元缩写：仅当 wan_scale 且整数部分为 1~9（否则是普通带小数点价格，如 25.5 元）
-        if wan_scale and 1 <= num_val < 10:
+        # 万元缩写只能在有量级证据时启用：显式“万”或标题/监控上限支持万元级。
+        # 仅凭 number+decimal 无法区分 3.5 元配件和 3.5 万元设备，默认按字面价格。
+        explicit_wan = "万" in (text or "") or "万" in (title or "")
+        scale_supported = max_price >= 10000 if max_price else False
+        if wan_scale and 1 <= num_val < 10 and (explicit_wan or scale_supported):
             return wan * 10000, True
         return wan, False
 
     # 回退：直接用 parse_price
     p = parse_price(text)
     return (p, False) if p is not None else (None, False)
+
+
+def _is_browser_error(exc: Exception) -> bool:
+    text = str(exc).lower()
+    return (
+        "browser has been closed" in text
+        or ("target page" in text and "closed" in text)
+        or "connection closed" in text
+        or "context or browser" in text
+    )
 
 
 def compute_mtop_sign(token: str, t: str, app_key: str = "34839810", data: str = "") -> str:
@@ -421,7 +437,8 @@ class GoofishMonitor:
         # 排序参数可能触发风控，默认不加（综合排序）
         return base
 
-    async def _extract_from_dom(self, page: Page, wan_scale: bool = False) -> list[dict]:
+    async def _extract_from_dom(self, page: Page, wan_scale: bool = False,
+                                max_price: float = 0) -> list[dict]:
         """
         从渲染后的 DOM 中提取商品信息。
         基于闲鱼搜索卡片的标准结构：
@@ -465,7 +482,8 @@ class GoofishMonitor:
             # textContent 如 "¥3.20" 实际表示 3.20 万元 = ¥32000（万元隐式，无"万"字）。
             # wan_scale=True 时才把 "X.YY"(1<=X<10) 解释为万元，避免误伤真实低价商品。
             price, wan_flag = parse_price_extended(
-                card["price"], card["priceNum"], card["priceDec"], wan_scale=wan_scale
+                card["price"], card["priceNum"], card["priceDec"],
+                wan_scale=wan_scale, max_price=max_price, title=card["title"]
             )
             if price is None:
                 continue
@@ -516,8 +534,8 @@ class GoofishMonitor:
             # 模拟滚动加载更多
             await self._scroll_and_collect(page)
 
-            # DOM 解析（主要）
-            dom_items = await self._extract_from_dom(page, wan_scale=True)
+            # DOM 解析（主要）；万元判定由显式“万”或 max_price 量级共同确认
+            dom_items = await self._extract_from_dom(page, wan_scale=True, max_price=max_price)
 
             # 合并 API 数据（补充字段）
             all_items = self._merge_items(dom_items)
@@ -532,6 +550,8 @@ class GoofishMonitor:
             logger.info(f"搜索 {keyword} 共提取 {len(all_items)} 条商品")
             return all_items
         except Exception as e:
+            if _is_browser_error(e):
+                raise
             logger.error(f"搜索 {keyword} 失败: {e}")
             return []
         finally:
@@ -599,11 +619,12 @@ def matches_keyword(title: str, keyword: str) -> bool:
 
     # 型号数字词：含数字的词元（如 "15"、"256"、"m3"、"a7m4"、"4090"）是区分型号的关键，
     # 标题必须命中全部，防止 "iPhone 14" 混入 "iPhone 15"，"4060" 冒充 "4090" 等。
-    model_nums = [
+    model_tokens = [
         t for t in tokens
         if re.search(r"\d", t) and len(t) >= 2
     ]
-    for t in model_nums:
+    model_tokens.extend(t for t in tokens if t.lower() in PRO_MODEL_WORDS)
+    for t in model_tokens:
         if t.lower() not in title_lower:
             return False
 
@@ -739,6 +760,10 @@ def evaluate_item(
         threshold = credit_score(min_seller_credit)
         if score is not None and threshold is not None and score < threshold:
             hard.append(f"卖家信用过低({credit})")
+        elif score is None:
+            hard.append("卖家信用未知")
+    else:
+        hard.append("卖家信用未知")
 
     # 引流文案识别
     scam_hard, scam_warn = detect_scam(

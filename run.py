@@ -23,7 +23,9 @@ if sys.platform == "win32":
         pass
 
 from config import MONITOR_ITEMS, MONITOR_SETTINGS
+from database import Database
 from monitor import GoofishMonitor, filter_items
+from monitor_service import MonitorService
 from notifier import NotifierManager
 from storage import SeenStorage, StatsCollector
 
@@ -137,7 +139,7 @@ def _notify_product(notifier, stats, product: dict, keyword: str):
 
 
 async def run_monitor_forever(monitor, notifier, storage, stats):
-    """持续运行监控循环。"""
+    """持续运行监控循环（旧版 CLI 兼容路径）。"""
     interval = MONITOR_SETTINGS.get("interval_minutes", 30)
     logger.info("=" * 55)
     logger.info("  闲鱼价格监控已启动")
@@ -189,24 +191,26 @@ async def main():
         await cmd_login(monitor)
         return
 
-    storage = SeenStorage(MONITOR_SETTINGS.get("data_dir", "./data"))
-    stats = StatsCollector(MONITOR_SETTINGS.get("data_dir", "./data"))
-    notifier = NotifierManager()
-
-    try:
-        await monitor.start()
-        if args.once:
-            logger.info("单轮检查模式")
-            await check_once(monitor, notifier, storage, stats)
-            logger.info("单轮检查完成")
-        else:
-            await run_monitor_forever(monitor, notifier, storage, stats)
-    except KeyboardInterrupt:
-        logger.info("收到停止信号，正在退出...")
-    except Exception as e:
-        logger.error(f"运行出错: {e}")
-    finally:
-        await monitor.stop()
+    db = Database("monitor.db")
+    notifier = NotifierManager(db)
+    service = MonitorService(db, notifier)
+    # CLI 与仪表盘共用 MonitorService/SQLite 管线，避免过滤和去重不一致。
+    if args.once:
+        service.start()
+        while service.status in ("starting", "running", "checking") and service.last_check_at is None:
+            await asyncio.sleep(0.2)
+        await asyncio.sleep(1)
+        service.stop()
+    else:
+        service.start()
+        try:
+            while service._thread and service._thread.is_alive():
+                await asyncio.sleep(1)
+        except KeyboardInterrupt:
+            logger.info("收到停止信号，正在退出...")
+        finally:
+            service.stop()
+    db.close()
 
 
 if __name__ == "__main__":
