@@ -37,6 +37,14 @@
 - 修复 `_ensure_browser` 误判浏览器失效：`BrowserContext` 无 `is_closed()`，改用 `pages` 属性探测连接
 - 修复 `_is_browser_error` 不识别 `BrowserDeadError`，浏览器失效时无法触发重启
 
+### Windows 系统级安装包
+- 新增 `install.ps1`：一键安装（检测 Python → 创建 `.venv` → 安装依赖与 Playwright Chromium → 注册任务计划程序 `XianYuMonitor` 登录自启 → 引导扫码登录），支持 `-NoElevate` 供安装包静默调用
+- 新增 `uninstall.ps1`：停止并删除自启任务，可选清理数据/虚拟环境（含静默卸载模式，保留用户数据）
+- 新增 `xianyu-monitor.iss`：Inno Setup 6 安装包定义，编译产出 `.exe` 安装程序（默认安装到用户目录，普通权限可写）
+- 安装采用任务计划程序 ONLOGON（交互会话）而非 Windows 服务：Session 0 无法创建窗口，有头 Chromium 无法在服务会话运行
+- 修复 CSV 导出公式注入（S-06）：`=`/`+`/`-`/`@` 开头单元格加单引号前缀 + 回归测试
+- 修复 `/api/status` 轮询间隔默认值与 `config` 不一致
+
 ## [1.0.0] - 2026-08-28
 
 ### 新增

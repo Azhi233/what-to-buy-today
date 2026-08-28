@@ -78,7 +78,6 @@ def test_export_filename_sanitized():
 
 def test_export_prevents_csv_formula_injection():
     """S-06：以 = + - @ 开头的单元格加单引号，防止 Excel 公式注入。"""
-    from database import Database
     from app import db
 
     db.add_product("CSV注入测试", 1000, 100, "", 1, "")

@@ -92,6 +92,43 @@ nssm start WhatToBuyToday
 
 任务计划程序的操作同样使用 `python E:\buy\app.py --no-browser --port 5000`，工作目录设为 `E:\buy`，并配置 `.env` 或系统环境变量。
 
+## Windows 一键安装（推荐最终用户）
+
+项目提供两个安装包封装：
+
+### 1. 脚本安装（无需额外工具）
+
+```powershell
+# 右键"以管理员身份运行" PowerShell：
+powershell -ExecutionPolicy Bypass -File .\install.ps1
+```
+
+脚本自动完成：检测 Python → 创建 `.venv` → 安装依赖与 Playwright Chromium → 注册任务计划程序 `XianYuMonitor`（用户登录后自启，崩溃自动重启）→ 引导首次扫码登录。
+
+卸载：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\uninstall.ps1
+```
+
+> **为什么用任务计划程序 ONLOGON 而不是 Windows 服务？**
+> 闲鱼风控要求有头浏览器，而 Windows 服务运行在 Session 0（无交互桌面），
+> 有头 Chromium 无法在其中创建窗口。任务计划程序以当前用户登录会话运行，
+> 有头模式完全正常，同时具备开机自启与崩溃自动重启（`RestartOnFailure`）。
+
+### 2. Inno Setup 安装包（生成 .exe 安装程序）
+
+用 [Inno Setup 6](https://jrsoftware.org/isinfo.php) 编译 `xianyu-monitor.iss`，产物为 `Output\XianYuMonitor-Setup-x.x.x.exe`：
+
+```bat
+ISCC.exe xianyu-monitor.iss
+```
+
+安装包特性：
+- 默认安装到 `%LOCALAPPDATA%\Programs\XianYuMonitor`（普通用户可写，无需管理员运行）
+- 安装完成后自动执行 `install.ps1 -NoElevate`（联网装依赖，约 200MB）
+- 开始菜单/桌面快捷方式、卸载入口（卸载时保留用户数据）
+
 ## 健康探针
 
 `GET /api/healthz` 始终免鉴权，返回 `ok`、`status`、`uptime_seconds`、`last_check_at`、`rss_mb`、`db_mb` 等字段，可供 Docker healthcheck、Uptime Kuma 或 k8s livenessProbe 使用。
