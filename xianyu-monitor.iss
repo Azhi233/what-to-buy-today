@@ -61,7 +61,7 @@ Source: "uninstall.ps1"; DestDir: "{app}"; Flags: ignoreversion
 ; 排除运行时文件（.venv/data/browser_profile/日志由安装脚本创建）
 
 [Icons]
-Name: "{group}\仪表盘 (http://127.0.0.1:5000)"; Filename: "http://127.0.0.1:5000"
+Name: "{group}\打开监控仪表盘"; Filename: "http://127.0.0.1:5000"
 Name: "{group}\重新登录闲鱼"; Filename: "{app}\.venv\Scripts\python.exe"; Parameters: "{app}\run.py --login"
 Name: "{group}\查看文档"; Filename: "https://github.com/Azhi233/what-to-buy-today#readme"
 Name: "{group}\{cm:UninstallProgram,{#MyAppName}}"; Filename: "{uninstallexe}"
