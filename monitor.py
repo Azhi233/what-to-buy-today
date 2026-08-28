@@ -492,7 +492,8 @@ class GoofishMonitor:
         """
         搜索指定关键词，返回商品列表。
         过滤掉与关键词无关的推荐商品。
-        max_price >= 10000 时启用万元缩写修正（闲鱼把万元显示为 X.YY）。
+        万元缩写修正不再依赖 max_price 阈值（C2）：只要 DOM 拆成 number+decimal 且 1<=number<10，
+        统一按“X.YY 万元”修正，避免不同阈值下同一商品价格不一致。
         """
         page = await self._new_page()
         try:
@@ -516,8 +517,7 @@ class GoofishMonitor:
             await self._scroll_and_collect(page)
 
             # DOM 解析（主要）
-            wan_scale = max_price is not None and max_price >= 10000
-            dom_items = await self._extract_from_dom(page, wan_scale=wan_scale)
+            dom_items = await self._extract_from_dom(page, wan_scale=True)
 
             # 合并 API 数据（补充字段）
             all_items = self._merge_items(dom_items)
@@ -535,7 +535,16 @@ class GoofishMonitor:
             logger.error(f"搜索 {keyword} 失败: {e}")
             return []
         finally:
-            await page.close()
+            # B2: page.close 超时兜底，避免异常路径泄漏页面句柄
+            try:
+                await asyncio.wait_for(page.close(), timeout=5)
+            except Exception:
+                try:
+                    # 兜底：若 close 超时/失败，尝试强制关闭上下文页面列表
+                    if not page.is_closed():
+                        await page.close()
+                except Exception:
+                    pass
 
     async def _scroll_and_collect(self, page: Page):
         """模拟人类滚动页面，触发懒加载。"""
@@ -740,4 +749,3 @@ def evaluate_item(
     warn.extend(scam_warn)
 
     return {"pass": not hard, "hard": hard, "warn": warn}
-    return results

@@ -28,15 +28,26 @@ from notifier import NotifierManager
 from storage import SeenStorage, StatsCollector
 
 # 日志配置
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
-    handlers=[
-        logging.StreamHandler(sys.stdout),
-        logging.FileHandler("monitor.log", encoding="utf-8"),
-    ],
-)
+_LOG_FMT = "%(asctime)s [%(levelname)s] %(message)s"
+_LOG_DATEFMT = "%Y-%m-%d %H:%M:%S"
+
+
+def _setup_logging(log_file: str = "monitor.log"):
+    formatter = logging.Formatter(_LOG_FMT, datefmt=_LOG_DATEFMT)
+    handlers: list[logging.Handler] = [logging.StreamHandler(sys.stdout)]
+    try:
+        from logging.handlers import RotatingFileHandler
+        fh = RotatingFileHandler(log_file, maxBytes=5 * 1024 * 1024, backupCount=3, encoding="utf-8")
+        fh.setFormatter(formatter)
+        handlers.append(fh)
+    except Exception:
+        fh = logging.FileHandler(log_file, encoding="utf-8")
+        fh.setFormatter(formatter)
+        handlers.append(fh)
+    logging.basicConfig(level=logging.INFO, format=_LOG_FMT, datefmt=_LOG_DATEFMT, handlers=handlers, force=True)
+
+
+_setup_logging()
 logger = logging.getLogger("run")
 
 

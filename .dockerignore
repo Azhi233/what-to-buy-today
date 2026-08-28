@@ -1,0 +1,11 @@
+.git
+__pycache__
+*.pyc
+browser_profile
+data
+monitor.db
+*.log
+dashboard.pid
+*.db
+.venv
+venv

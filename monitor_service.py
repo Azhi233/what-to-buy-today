@@ -6,6 +6,7 @@
 
 import asyncio
 import logging
+import random
 import threading
 import time
 from datetime import datetime
@@ -89,6 +90,8 @@ class MonitorService:
         self.last_error: str = ""
         self.round_items = 0
         self.round_matches = 0
+        self._round_count = 0
+        self._last_browser_restart_at: float | None = None
 
     # ─────────────────────────────────────
     #  生命周期
@@ -131,11 +134,23 @@ class MonitorService:
         logger.info("监控服务已启动")
 
         restart_delay = 5
+        self._round_count = 0
+        self._last_browser_restart_at = time.time()
+        self._zero_streak = 0
+        self._last_auth_alert_at: float | None = None
+        self._last_cleanup_at: float | None = None
         try:
             while not self._stop_event.is_set():
                 try:
                     await self._check_round(monitor)
+                    self._round_count += 1
                     restart_delay = 5  # 成功后重置退避
+                    # B2: 定时回收（50轮 或 12小时）
+                    await self._maybe_recycle_browser(monitor)
+                    # B1: 每日自动清理（每天一次，03:00后首次触发）
+                    await self._maybe_cleanup()
+                    # B3: 连续0条告警
+                    await self._check_zero_streak_alert()
                 except Exception as e:
                     self.status = "error"
                     self.last_error = str(e)
@@ -154,8 +169,11 @@ class MonitorService:
                     continue  # 立即重试本轮
 
                 interval = float(self.db.get_setting("interval_minutes", 30))
-                self.next_check_at = time.time() + interval * 60
-                logger.info(f"本轮检查完成，{interval} 分钟后进行下一轮")
+                # ±5分钟随机抖动，降低固定间隔的行为指纹
+                jitter = random.uniform(-5, 5)
+                effective = max(1, interval + jitter)
+                self.next_check_at = time.time() + effective * 60
+                logger.info(f"本轮检查完成，约 {effective:.1f} 分钟后进行下一轮（抖动 ±5min）")
 
                 # 等待下一轮或手动触发
                 while not self._stop_event.is_set():
@@ -217,6 +235,73 @@ class MonitorService:
             except Exception:
                 pass
         raise BrowserDeadError("浏览器已失效，正在自动重启")
+
+    # ── B2: 定时回收 ──
+    async def _maybe_recycle_browser(self, monitor: GoofishMonitor):
+        """50轮 或 12小时 触发主动重启，减少慢性泄漏."""
+        now = time.time()
+        due_round = self._round_count > 0 and self._round_count % 50 == 0
+        due_time = (now - (self._last_browser_restart_at or now)) >= 12 * 3600
+        if not (due_round or due_time):
+            return
+        reason = "50轮" if due_round else "12小时"
+        logger.info(f"定时回收：已运行 {self._round_count} 轮，触发浏览器重启（{reason}）")
+        async with self._browser_lock:
+            ok = await self._restart_browser(monitor)
+            if ok:
+                self._last_browser_restart_at = now
+
+    # ── B1: 每日自动清理 ──
+    async def _maybe_cleanup(self):
+        """每天凌晨后首次触发保留策略清理（避免每轮都执行）。"""
+        now = time.time()
+        if self._last_cleanup_at and now - self._last_cleanup_at < 20 * 3600:
+            return
+        # 仅在本地时间 03:00 之后触发，避免刚启动就清理
+        try:
+            hour = datetime.now().hour
+            if self._last_cleanup_at is None and hour < 3:
+                return
+        except Exception:
+            pass
+        try:
+            r = self.db.get_retention()
+            stats = self.db.cleanup_expired(vacuum=False, **r)
+            self._last_cleanup_at = now
+            if any(stats.values()):
+                logger.info(f"自动清理完成: {stats}")
+        except Exception as e:
+            logger.warning(f"自动清理失败: {e}")
+
+    # ── B3: 登录过期告警 ──
+    async def _check_zero_streak_alert(self):
+        """
+        连续3轮总商品数为0则判定登录/风控异常，推送 Bark 告警。
+        同一异常 6 小时内不重复推送。
+        """
+        # 汇总本轮总数：round_items 是本轮累计，结束后为最终值
+        if self.round_items == 0:
+            self._zero_streak += 1
+        else:
+            self._zero_streak = 0
+            return
+        if self._zero_streak < 3:
+            return
+        now = time.time()
+        if self._last_auth_alert_at and now - self._last_auth_alert_at < 6 * 3600:
+            return
+        self._last_auth_alert_at = now
+        self.last_error = "连续3轮未获取到商品，疑似登录过期或被风控"
+        self.status = "error"
+        self.db.log_check("*", "auth_expired", 0, 0, self.last_error)
+        try:
+            self.notifier.send(
+                "闲鱼监控 — 登录异常告警",
+                "连续3轮未获取到商品，可能是登录过期或被风控。\n请运行 python run.py --login 重新扫码。",
+                "",
+            )
+        except Exception:
+            pass
 
     # ─────────────────────────────────────
     #  单轮检查
@@ -371,12 +456,26 @@ class MonitorService:
                 if old_price is not None:
                     await self._notify_drop(item, keyword, old_price)
 
-        # 推送新匹配商品
+        # 推送新匹配商品 — B4: 单轮>10条合并为摘要，避免 Bark/邮件 风暴
         notified_count = 0
-        for item in matches:
-            self.db.mark_notified(item["item_id"])
-            if await self._notify_match(item, keyword):
-                notified_count += 1
+        if len(matches) > 10:
+            # 全部标记已推送
+            for it in matches:
+                self.db.mark_notified(it["item_id"])
+            from notifier import BarkNotifier as _BN
+            summary_title, summary_content = _BN.build_summary_payload(matches, keyword)
+            # 复用统一发送（所有启用的渠道）；url 置空，摘要里提示看仪表盘
+            ok_list = self.notifier.send(summary_title, summary_content, "")
+            ok = bool(ok_list)
+            for it in matches:
+                self.db.log_notification(it["item_id"], keyword, it["title"], it["price"], it.get("url",""), "推送(摘要)" if ok else "控制台(摘要)")
+            notified_count = len(matches) if ok else 0
+            logger.info(f"[{keyword}] 单轮 {len(matches)} 条匹配过多，已合并为摘要推送")
+        else:
+            for item in matches:
+                self.db.mark_notified(item["item_id"])
+                if await self._notify_match(item, keyword):
+                    notified_count += 1
 
         self.round_items += len(items)
         self.round_matches += len(matches)

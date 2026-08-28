@@ -1,0 +1,19 @@
+services:
+  xianyu-monitor:
+    build: .
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./browser_profile:/app/browser_profile
+      - ./data:/app/data
+      - ./monitor.db:/app/monitor.db
+    restart: unless-stopped
+    environment:
+      - TZ=Asia/Shanghai
+    # 健康检查：仪表盘探针
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5000/api/healthz', timeout=5)"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 60s

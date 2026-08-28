@@ -540,6 +540,38 @@ $('#btn-export').addEventListener('click', () => {
   window.open('/api/export', '_blank');
 });
 
+// 保留策略
+async function loadRetention() {
+  try {
+    const r = await api('/api/retention');
+    $('#ret-items').value = r.items_days;
+    $('#ret-history').value = r.history_days;
+    $('#ret-checks').value = r.checks_keep;
+    $('#ret-notifs').value = r.notifications_keep;
+  } catch (e) { /* ignore */ }
+}
+$('#btn-save-retention').addEventListener('click', async () => {
+  try {
+    await api('/api/retention', {
+      method: 'POST',
+      body: JSON.stringify({
+        items_days: parseInt($('#ret-items').value, 10),
+        history_days: parseInt($('#ret-history').value, 10),
+        checks_keep: parseInt($('#ret-checks').value, 10),
+        notifications_keep: parseInt($('#ret-notifs').value, 10),
+      }),
+    });
+    toast('保留策略已保存');
+  } catch (e) { toast('保存失败: ' + e.message, true); }
+});
+$('#btn-cleanup').addEventListener('click', async () => {
+  try { const r = await api('/api/cleanup', { method: 'POST', body: JSON.stringify({}) }); toast(`已清理：商品 ${r.stats.items_deleted} 条 / 历史 ${r.stats.history_deleted} 条`); } catch (e) { toast('清理失败: ' + e.message, true); }
+});
+$('#btn-cleanup-vacuum').addEventListener('click', async () => {
+  const btn = $('#btn-cleanup-vacuum'); btn.disabled = true; btn.textContent = '回收中…';
+  try { const r = await api('/api/cleanup', { method: 'POST', body: JSON.stringify({ vacuum: true }) }); toast(`已清理并回收`); } catch (e) { toast('回收失败: ' + e.message, true); } finally { btn.disabled = false; btn.textContent = '清理并回收空间'; }
+});
+
 $('#btn-clear-items').addEventListener('click', async () => {
   if (!confirm('确定清空全部商品数据？此操作不可恢复。')) return;
   try {
@@ -709,5 +741,6 @@ loadProducts();
 loadNotifications();
 loadDrops();
 loadSettings();
+loadRetention();
 
 setInterval(refreshStatus, 5000);

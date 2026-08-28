@@ -49,7 +49,8 @@ CREATE TABLE IF NOT EXISTS price_history (
     core_count INTEGER,
     min_price REAL,
     max_price REAL,
-    item_count INTEGER
+    item_count INTEGER,
+    epoch INTEGER DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_history_keyword ON price_history(keyword);
 
@@ -106,8 +107,14 @@ class Database:
     def __init__(self, db_path: str = "monitor.db"):
         self.db_path = db_path
         self._lock = threading.Lock()
-        self._conn = sqlite3.connect(db_path, check_same_thread=False)
+        self._conn = sqlite3.connect(db_path, check_same_thread=False, timeout=10.0)
         self._conn.row_factory = sqlite3.Row
+        try:
+            self._conn.execute("PRAGMA journal_mode=WAL")
+            self._conn.execute("PRAGMA synchronous=NORMAL")
+            self._conn.execute("PRAGMA busy_timeout=5000")
+        except Exception:
+            pass
         with self._lock:
             self._conn.executescript(SCHEMA)
             self._migrate()
@@ -152,6 +159,18 @@ class Database:
                 created_at TEXT DEFAULT (datetime('now', 'localtime'))
             )
         """)
+
+        # 时间一致性：price_history 增加 epoch 字段（C2）
+        try:
+            hcol2 = [r["name"] for r in self._conn.execute("PRAGMA table_info(price_history)")]
+            if "epoch" not in hcol2:
+                self._conn.execute("ALTER TABLE price_history ADD COLUMN epoch INTEGER DEFAULT 0")
+                # 回填历史 epoch
+                self._conn.execute(
+                    "UPDATE price_history SET epoch = CAST(strftime('%s', check_time) AS INTEGER) WHERE epoch IS NULL OR epoch=0"
+                )
+        except Exception:
+            pass
 
     def _query(self, sql: str, params: tuple = ()) -> list[sqlite3.Row]:
         with self._lock:
@@ -337,16 +356,18 @@ class Database:
                              avg_price: float, filtered_avg: float,
                              core_count: int, min_price: float,
                              max_price: float, item_count: int) -> None:
+        now_epoch = int(time.time())
         self._execute(
             "INSERT INTO price_history (keyword, median_price, avg_price, filtered_avg, core_count,"
-            " min_price, max_price, item_count) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            " min_price, max_price, item_count, epoch) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (keyword, median_price, avg_price, filtered_avg, core_count,
-             min_price, max_price, item_count),
+             min_price, max_price, item_count, now_epoch),
         )
 
     def get_price_history(self, keyword: str, limit: int = 200) -> list[sqlite3.Row]:
+        # 按 epoch 排序（C2），兼容旧 epoch=0 的历史数据回落到 id 排序
         return self._query(
-            "SELECT * FROM price_history WHERE keyword=? ORDER BY id DESC LIMIT ?",
+            "SELECT * FROM price_history WHERE keyword=? ORDER BY COALESCE(NULLIF(epoch,0), id) DESC LIMIT ?",
             (keyword, limit),
         )
 
@@ -390,6 +411,64 @@ class Database:
         return self._query(
             "SELECT * FROM notifications ORDER BY id DESC LIMIT ?", (limit,)
         )
+
+    # ─────────────────────────────────────
+    #  保留策略与清理（B1）
+    # ─────────────────────────────────────
+
+    def cleanup_expired(self, items_days: int = 30, history_days: int = 60,
+                        checks_keep: int = 500, notifications_keep: int = 1000,
+                        vacuum: bool = False) -> dict:
+        """按保留策略清理过期数据，可选 VACUUM 回收空间。"""
+        stats = {}
+        with self._lock:
+            cur = self._conn.execute(
+                "DELETE FROM items WHERE julianday('now')-julianday(last_seen) > ?", (items_days,))
+            stats["items_deleted"] = cur.rowcount
+            cur = self._conn.execute(
+                "DELETE FROM price_history WHERE julianday('now')-julianday(check_time) > ?", (history_days,))
+            stats["history_deleted"] = cur.rowcount
+            cur = self._conn.execute(
+                "DELETE FROM checks_log WHERE id NOT IN (SELECT id FROM checks_log ORDER BY id DESC LIMIT ?)",
+                (checks_keep,))
+            stats["checks_deleted"] = cur.rowcount
+            cur = self._conn.execute(
+                "DELETE FROM notifications WHERE id NOT IN (SELECT id FROM notifications ORDER BY id DESC LIMIT ?)",
+                (notifications_keep,))
+            stats["notifications_deleted"] = cur.rowcount
+            self._conn.commit()
+            if vacuum:
+                try:
+                    self._conn.execute("VACUUM")
+                except Exception:
+                    pass
+        return stats
+
+    def get_retention(self) -> dict:
+        """从 settings 读取保留策略，缺省用 DEFAULT_RETENTION."""
+        def _int(key: str, default: int) -> int:
+            v = self.get_setting(key, "")
+            try:
+                return int(v) if v else default
+            except Exception:
+                return default
+        return {
+            "items_days": _int("retention_items_days", DEFAULT_RETENTION["items_days"]),
+            "history_days": _int("retention_history_days", DEFAULT_RETENTION["history_days"]),
+            "checks_keep": _int("retention_checks_keep", DEFAULT_RETENTION["checks_keep"]),
+            "notifications_keep": _int("retention_notifications_keep", DEFAULT_RETENTION["notifications_keep"]),
+        }
+
+    def set_retention(self, **kwargs) -> None:
+        key_map = {
+            "items_days": "retention_items_days",
+            "history_days": "retention_history_days",
+            "checks_keep": "retention_checks_keep",
+            "notifications_keep": "retention_notifications_keep",
+        }
+        for k, v in kwargs.items():
+            if k in key_map:
+                self.set_setting(key_map[k], str(int(v)))
 
     # ─────────────────────────────────────
     #  运行设置
@@ -438,3 +517,12 @@ def parse_exclude_keywords(raw: str) -> list[str]:
         return []
     parts = raw.replace("，", ",").replace(" ", ",").split(",")
     return [p.strip() for p in parts if p.strip()]
+
+
+# 保留策略默认值（B1）
+DEFAULT_RETENTION = {
+    "items_days": 30,
+    "history_days": 60,
+    "checks_keep": 500,
+    "notifications_keep": 1000,
+}

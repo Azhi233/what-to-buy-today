@@ -1,0 +1,16 @@
+[Unit]
+Description=闲鱼价格监控仪表盘
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/opt/what-to-buy-today
+ExecStart=/usr/bin/python3 /opt/what-to-buy-today/app.py --no-browser --port 5000
+Restart=always
+RestartSec=10
+Environment=TZ=Asia/Shanghai
+# 日志由 app 本身 RotatingFileHandler 轮转，journal 也可查看：journalctl -u what-to-buy-today -f
+
+[Install]
+WantedBy=multi-user.target

@@ -5,6 +5,7 @@
 
 import logging
 import smtplib
+import time
 from email.header import Header
 from email.mime.text import MIMEText
 from email.utils import formataddr
@@ -35,6 +36,8 @@ def _safe_request(url: str, timeout: int = 10, **kwargs) -> requests.Response:
 class BarkNotifier:
     """Bark - iOS 推送通知（单条目标）。"""
 
+    MIN_INTERVAL = 0.3  # B4: Bark 单目标间隔，避免限频
+
     def __init__(self, server: str = "https://api.day.app", key: str = "",
                  label: str = "", enabled: bool = True):
         # 兼容旧的 dict 配置传入方式
@@ -48,6 +51,7 @@ class BarkNotifier:
         self.key = (key or "").strip()
         self.label = (label or "").strip()
         self._enabled_flag = bool(enabled)
+        self._last_sent_at = 0.0
 
     @property
     def enabled(self) -> bool:
@@ -60,6 +64,11 @@ class BarkNotifier:
     def send(self, title: str, content: str, url: str = "") -> bool:
         if not self.enabled:
             return False
+        # B4: 限流
+        now = time.time()
+        wait = self.MIN_INTERVAL - (now - self._last_sent_at)
+        if wait > 0:
+            time.sleep(wait)
         try:
             api_url = (
                 f"{self.server}/{self.key}/"
@@ -69,10 +78,27 @@ class BarkNotifier:
                 api_url += f"?url={requests.utils.quote(url)}"
             resp = _safe_request(api_url)
             result = resp.json()
-            return result.get("code") == 200
+            ok = result.get("code") == 200
+            if ok:
+                self._last_sent_at = time.time()
+            return ok
         except Exception as e:
             logger.error(f"[Bark:{self.display_name}] 发送失败: {e}")
             return False
+
+    @staticmethod
+    def build_summary_payload(items: list[dict], keyword: str, max_lines: int = 6) -> tuple[str, str]:
+        """B4: 单轮过多时使用的摘要内容（供 MonitorService 调用）。"""
+        total = len(items)
+        prices = sorted(i.get("price", 0) for i in items if i.get("price"))
+        pmin = min(prices) if prices else 0
+        pmax = max(prices) if prices else 0
+        title = f"闲鱼批量: {keyword} 发现 {total} 条新品"
+        lines = [f"监控词: {keyword}", f"共 {total} 条，价格 {pmin:.0f}~{pmax:.0f}，仅展示前 {max_lines} 条："]
+        for it in items[:max_lines]:
+            lines.append(f"¥{it.get('price',0):.0f} {it.get('title','')[:22]}")
+        lines.append("详情见仪表盘：市场分析 / 通知记录")
+        return title, "\n".join(lines)
 
 
 class PushPlusNotifier:

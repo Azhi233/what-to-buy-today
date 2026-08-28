@@ -12,6 +12,7 @@
 import argparse
 import ctypes
 import logging
+import logging.handlers
 import os
 import sys
 import threading
@@ -34,15 +35,27 @@ from database import Database, parse_exclude_keywords
 from monitor_service import MonitorService, build_monitor_settings, seed_products_from_config
 from notifier import BarkNotifier, NotifierManager
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
-    handlers=[
-        logging.StreamHandler(sys.stdout),
-        logging.FileHandler("dashboard.log", encoding="utf-8"),
-    ],
-)
+_LOG_FMT = "%(asctime)s [%(levelname)s] %(message)s"
+_LOG_DATEFMT = "%Y-%m-%d %H:%M:%S"
+
+
+def _setup_logging(log_file: str = "dashboard.log"):
+    """配置日志：控制台 + 轮转文件（5MB x3）。"""
+    formatter = logging.Formatter(_LOG_FMT, datefmt=_LOG_DATEFMT)
+    handlers: list[logging.Handler] = [logging.StreamHandler(sys.stdout)]
+    try:
+        from logging.handlers import RotatingFileHandler
+        fh = RotatingFileHandler(log_file, maxBytes=5 * 1024 * 1024, backupCount=3, encoding="utf-8")
+        fh.setFormatter(formatter)
+        handlers.append(fh)
+    except Exception:
+        fh = logging.FileHandler(log_file, encoding="utf-8")
+        fh.setFormatter(formatter)
+        handlers.append(fh)
+    logging.basicConfig(level=logging.INFO, format=_LOG_FMT, datefmt=_LOG_DATEFMT, handlers=handlers, force=True)
+
+
+_setup_logging()
 logger = logging.getLogger("dashboard")
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -52,6 +65,8 @@ db = Database(DB_PATH)
 db.seed_bark_from_config()
 notifier = NotifierManager(db)
 service = MonitorService(db, notifier)
+
+APP_STARTED_AT = time.time()
 
 app = Flask(__name__, static_folder="static", template_folder="templates")
 
@@ -96,6 +111,35 @@ def api_status():
 @app.route("/api/stats")
 def api_stats():
     return jsonify(db.get_stats())
+
+
+@app.route("/api/healthz")
+def api_healthz():
+    """健康探针：Uptime Kuma / 系统检查用."""
+    rss_mb = None
+    try:
+        import psutil  # 可选
+        rss_mb = round(psutil.Process().memory_info().rss / 1024 / 1024, 1)
+    except Exception:
+        pass
+    db_mb = None
+    try:
+        db_mb = round(os.path.getsize(DB_PATH) / 1024 / 1024, 2) if os.path.exists(DB_PATH) else None
+    except Exception:
+        pass
+    return jsonify({
+        "ok": True,
+        "status": service.status,
+        "uptime_seconds": int(time.time() - APP_STARTED_AT),
+        "uptime_human": _ts(APP_STARTED_AT),
+        "last_check_at": _ts(service.last_check_at),
+        "next_check_at": _ts(service.next_check_at),
+        "last_error": service.last_error,
+        "rss_mb": rss_mb,
+        "db_mb": db_mb,
+        "monitored_products": db.count_products(),
+        "total_items": db.get_stats().get("total_items", 0),
+    })
 
 
 # ─────────────────────────────────────────────
@@ -377,6 +421,39 @@ def api_test_bark_target(tid):
     return jsonify({"ok": ok, "label": row["label"] or row["bark_key"][:6]})
 
 
+@app.route("/api/retention", methods=["GET"])
+def api_get_retention():
+    return jsonify(db.get_retention())
+
+
+@app.route("/api/retention", methods=["POST"])
+def api_set_retention():
+    data = request.get_json(force=True) or {}
+    try:
+        updates = {}
+        for k in ("items_days", "history_days", "checks_keep", "notifications_keep"):
+            if k in data:
+                v = int(data[k])
+                if v < 1:
+                    return jsonify({"ok": False, "error": f"{k} 必须 >= 1"}), 400
+                updates[k] = v
+        if updates:
+            db.set_retention(**updates)
+        return jsonify({"ok": True, "retention": db.get_retention()})
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "参数格式错误"}), 400
+
+
+@app.route("/api/cleanup", methods=["POST"])
+def api_cleanup():
+    """手动触发保留策略清理."""
+    data = request.get_json(silent=True) or {}
+    vacuum = bool(data.get("vacuum"))
+    r = db.get_retention()
+    stats = db.cleanup_expired(vacuum=vacuum, **r)
+    return jsonify({"ok": True, "stats": stats, "retention": r})
+
+
 @app.route("/api/clear-items", methods=["POST"])
 def api_clear_items():
     db._execute("DELETE FROM items")
@@ -472,18 +549,19 @@ def _calc_distribution(prices: list[float], bins: int = 12) -> list[dict]:
 
 
 def _calc_trend(db: Database, keyword: str, limit: int = 100) -> list[dict]:
-    """计算价格走势（按检查时间聚合）。"""
+    """计算价格走势（按检查时间聚合，epoch 排序）。"""
     if keyword:
         rows = db.get_price_history(keyword, limit=limit)
     else:
-        # 全部关键词：按时间聚合
+        # 全部关键词：按 epoch 聚合（兼容旧数据）
         rows = db._query(
-            "SELECT * FROM price_history ORDER BY id DESC LIMIT ?", (limit,)
+            "SELECT * FROM price_history ORDER BY COALESCE(NULLIF(epoch,0), id) DESC LIMIT ?", (limit,)
         )
     points = []
     for r in reversed(rows):
         points.append({
             "time": r["check_time"],
+            "epoch": r["epoch"] if "epoch" in r.keys() else None,
             "keyword": r["keyword"],
             "median": r["median_price"],
             "avg": r["avg_price"],

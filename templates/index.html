@@ -199,6 +199,30 @@
           </div>
 
           <div class="panel">
+            <div class="panel-header"><h3>保留策略</h3></div>
+            <div class="setting-row">
+              <label>商品池保留天数（超期未出现自动清理）</label>
+              <div class="setting-control"><input type="number" id="ret-items" min="1" max="365" step="1"><span class="hint">天</span></div>
+            </div>
+            <div class="setting-row">
+              <label>价格历史保留天数</label>
+              <div class="setting-control"><input type="number" id="ret-history" min="1" max="365" step="1"><span class="hint">天</span></div>
+            </div>
+            <div class="setting-row">
+              <label>检查日志保留条数</label>
+              <div class="setting-control"><input type="number" id="ret-checks" min="100" max="10000" step="100"><span class="hint">条</span></div>
+            </div>
+            <div class="setting-row">
+              <label>通知记录保留条数</label>
+              <div class="setting-control"><input type="number" id="ret-notifs" min="100" max="10000" step="100"><span class="hint">条</span></div>
+            </div>
+            <div class="setting-row">
+              <div class="setting-control"><button class="btn btn-sm btn-primary" id="btn-save-retention">保存保留策略</button><button class="btn btn-sm" id="btn-cleanup">立即清理</button><button class="btn btn-sm" id="btn-cleanup-vacuum" title="VACUUM 会短暂锁库">清理并回收空间</button></div>
+              <span class="hint">按此策略清理过期数据；每天凌晨也会自动清理一次</span>
+            </div>
+          </div>
+
+          <div class="panel">
             <div class="panel-header"><h3>数据管理</h3></div>
             <div class="setting-row">
               <label>导出商品数据</label>
