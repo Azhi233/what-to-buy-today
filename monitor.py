@@ -18,6 +18,8 @@ import hashlib
 import logging
 import random
 import re
+import subprocess
+import sys
 import time
 from typing import Optional
 
@@ -29,6 +31,48 @@ from playwright.async_api import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _hide_chrome_windows():
+    """Windows 下彻底隐藏 Playwright Chromium 窗口（含任务栏按钮）。
+
+    仅匹配 ms-playwright 目录下的 chromium 进程，不会误隐藏用户日常使用的 Chrome。
+    窗口隐藏后页面仍正常渲染（有头模式保持），用于后台抓取不影响前台工作。
+    """
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        out = subprocess.run(
+            ["powershell", "-NoProfile", "-Command",
+             "(Get-Process chrome -ErrorAction SilentlyContinue | "
+             "Where-Object { $_.Path -like '*ms-playwright*' } | "
+             "Select-Object -ExpandProperty Id) -join ','"],
+            capture_output=True, text=True, timeout=10,
+        )
+        pids = {int(p) for p in out.stdout.strip().split(",") if p.strip().isdigit()}
+        if not pids:
+            return
+
+        user32 = ctypes.windll.user32
+        user32.GetWindowThreadProcessId.restype = wintypes.DWORD
+        user32.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
+
+        def _callback(hwnd, _lparam):
+            pid = wintypes.DWORD()
+            user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+            if pid.value in pids and user32.IsWindowVisible(hwnd):
+                user32.ShowWindow(hwnd, 0)  # SW_HIDE
+            return True
+
+        WNDENUMPROC = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+        user32.EnumWindows(WNDENUMPROC(_callback), 0)
+        logger.debug("已隐藏后台浏览器窗口")
+    except Exception:
+        # 窗口隐藏失败不影响监控（窗口仍位于屏幕外）
+        logger.debug("隐藏浏览器窗口失败（窗口仍位于屏幕外）")
 
 # 常见 UA 池，随机选择，模拟不同用户
 PRO_MODEL_WORDS = {"pro", "max", "plus", "mini", "ultra", "promax", "pro max"}
@@ -217,6 +261,9 @@ class GoofishMonitor:
             timezone_id="Asia/Shanghai",
             args=browser_args,
         )
+        if hide_window:
+            # Windows 下彻底隐藏浏览器窗口（含任务栏按钮），前台工作完全无感知
+            _hide_chrome_windows()
         # 清除自动化标记，降低被识别为爬虫的风险
         await self._context.add_init_script("""
             Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
