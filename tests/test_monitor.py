@@ -29,10 +29,21 @@ def test_parse_price_empty_or_garbage_returns_none():
 
 # ── parse_price_extended（万元缩写）────────────────────────────
 
-def test_parse_price_extended_does_not_promote_low_price_decimal():
-    price, scaled = parse_price_extended("¥3.5", "3", ".5", True, max_price=28888)
+def test_parse_price_extended_low_budget_keeps_literal():
+    """低预算监控（如配件类）下 X.YY 保持字面价，不误伤低价商品。"""
+    price, scaled = parse_price_extended("¥3.5", "3", ".5", True, max_price=50)
     assert price == pytest.approx(3.5)
     assert not scaled
+
+
+def test_parse_price_extended_high_budget_promotes_to_wan():
+    """监控上限接近万元时，X.YY 识别为万元缩写（回归：29999 曾误识别为 2.99 元）。"""
+    price, scaled = parse_price_extended("¥2.99", "2", ".99", True, max_price=29999)
+    assert price == pytest.approx(29900)
+    assert scaled
+    price, scaled = parse_price_extended("¥3.20", "3", ".20", True, max_price=29999)
+    assert price == pytest.approx(32000)
+    assert scaled
 
 
 def test_parse_price_extended_explicit_wan():
@@ -57,6 +68,39 @@ def test_matches_keyword_requires_model_suffixes():
 def test_matches_keyword_empty_input():
     assert not matches_keyword("", "iPhone 15")
     assert not matches_keyword("二手iPhone", "")
+
+
+# ── evaluate_item：排除词 ─────────────────────────────────────
+
+def test_evaluate_item_exclude_keyword_filters_full_title():
+    """完整标题含排除词必须过滤（回归：屏蔽词不生效）。"""
+    v = evaluate_item(
+        {"title": "DGX spark 全新未拆 详情咨询 私聊", "price": 29900},
+        max_price=30000, min_price=25000,
+        exclude_keywords=["咨询", "私聊"],
+    )
+    assert v["pass"] is False
+    assert any("排除词" in r for r in v["hard"])
+
+
+def test_evaluate_item_exclude_keyword_keeps_normal_title():
+    """标题不含排除词时正常通过价格区间校验。"""
+    v = evaluate_item(
+        {"title": "DGX spark 全新未拆封", "price": 28800},
+        max_price=30000, min_price=25000,
+        exclude_keywords=["咨询", "私聊"],
+    )
+    assert v["pass"] is True
+
+
+def test_evaluate_item_price_range_filter():
+    """价格区间：万元解析后的 29900 在 [25000, 30000] 内应通过。"""
+    v = evaluate_item(
+        {"title": "DGX spark", "price": 29900},
+        max_price=30000, min_price=25000,
+        exclude_keywords=[], must_include=[],
+    )
+    assert v["pass"] is True
 
 
 # ── credit_score ───────────────────────────────────────────────

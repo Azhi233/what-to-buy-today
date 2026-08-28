@@ -81,7 +81,6 @@ PRO_MODEL_WORDS = {"pro", "max", "plus", "mini", "ultra", "promax", "pro max"}
 WAN_UNIT = 10000                        # 万元换算倍率（"X.YY 万" = X.YY × 10000）
 WAN_INT_RANGE = (1, 10)                 # 万元缩写整数部分范围：1 ≤ number < 10
 WAN_CANDIDATE_MAX_MULTIPLIER = 3.0      # 万元候选值上限倍数：wan×10000 ≤ max_price×3
-WAN_SAME_ORDER_RATIO = 0.9              # 万元候选须与监控上限同量级（≤90%×max_price）
 WAN_SUSPICIOUS_LITERAL_RATIO = 0.1      # 字面价低于 min_price 的该比例时视为可疑低价
 
 # ── 页面操作超时（毫秒 / 秒）──
@@ -167,22 +166,19 @@ def parse_price_extended(text: str, price_num: str = "", price_dec: str = "",
             wan = num_val + float(frac)
         except (ValueError, TypeError):
             return None, False
-        # 万元缩写只能在有量级证据时启用：显式“万”或标题/监控上限支持万元级。
+        # 万元缩写只能在有量级证据时启用：显式“万”或监控上限支持万元级。
         # 仅凭 number+decimal 无法区分 3.5 元配件和 3.5 万元设备，默认按字面价格。
         explicit_wan = "万" in (text or "") or "万" in (title or "")
         plausible_wan = max_price > 0 and wan * WAN_UNIT <= max_price * WAN_CANDIDATE_MAX_MULTIPLIER
-        # 没有单位时，万元候选值还必须与监控上限处于同一数量级。
-        if not explicit_wan and max_price > 0 and wan * WAN_UNIT > max_price * WAN_SAME_ORDER_RATIO:
-            plausible_wan = False
-        # 字面价可疑低：仅当"万元解释"远高于监控上限（>3×max）时才按万元，
-        # 避免高 min_price 监控下低价配件被误放大（如 3.5 元 → 35000）。
+        # 字面价可疑低：高 min_price 监控下出现明显低于下限的字面价，
+        # 判定为万元缩写漏标（万元解释需在监控上限 3 倍内，超预算按万元也不影响过滤）。
         suspicious_literal = (
             min_price > 0 and wan < min_price * WAN_SUSPICIOUS_LITERAL_RATIO
-            and wan * WAN_UNIT > max_price * WAN_CANDIDATE_MAX_MULTIPLIER
+            and wan * WAN_UNIT <= max_price * WAN_CANDIDATE_MAX_MULTIPLIER
         )
         lo, hi = WAN_INT_RANGE
         if wan_scale and lo <= num_val < hi and (explicit_wan or plausible_wan or suspicious_literal):
-            return wan * WAN_UNIT, True
+            return round(wan * WAN_UNIT, 2), True
         return wan, False
 
     # 回退：直接用 parse_price
@@ -530,7 +526,12 @@ class GoofishMonitor:
                 const href = el.getAttribute('href') || '';
                 const get = (sel) => {
                     const node = el.querySelector(sel);
-                    return node ? (node.innerText || node.textContent || '').trim() : '';
+                    if (!node) return '';
+                    // 优先取 title 属性：完整标题（显示文本可能被 CSS 省略，
+                    // 用截断后的标题会导致排除词/必须包含词漏检）
+                    const attr = node.getAttribute('title');
+                    if (attr && attr.trim()) return attr.trim();
+                    return (node.innerText || node.textContent || '').trim();
                 };
                 const pw = el.querySelector('[class*="price-wrap"]');
                 const numEl = pw ? pw.querySelector('[class*="number"]') : null;
