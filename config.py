@@ -304,4 +304,8 @@ MONITOR_SETTINGS = {
     # 搜索结果翻页上限：按"最新 + 价格区间"翻页抓取时的最大页数
     # （保护：防止异常情况下无限翻页造成过多请求；价格筛选后一般仅几页）
     "max_scrape_pages": _env_int("MONITOR_MAX_SCRAPE_PAGES", 30),
+
+    # 每日首次检查抓取上限（全量建基线），当日后续轮次改用
+    # subsequent_max_items_per_page（增量抓最新，减少重复发布噪音）
+    "subsequent_max_items_per_page": _env_int("MONITOR_SUBSEQUENT_MAX_ITEMS", 60),
 }

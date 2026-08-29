@@ -282,6 +282,7 @@ let analysisData = null;
 let distChart = null;
 let trendChart = null;
 let activeFilter = null;
+let priceSort = null; // null=默认 | 'asc' | 'desc'
 
 $('#analysis-keyword').addEventListener('change', () => {
   activeFilter = null;
@@ -299,6 +300,13 @@ $('#btn-clear-price-filter').addEventListener('click', () => {
   $('#item-filter-badge').hidden = true;
   $('#btn-clear-price-filter').hidden = true;
   loadAnalysis();
+});
+// 价格排序：默认 → 升序 → 降序 循环
+$('#btn-sort-price').addEventListener('click', () => {
+  priceSort = priceSort === null ? 'asc' : priceSort === 'asc' ? 'desc' : null;
+  $('#btn-sort-price').textContent =
+    priceSort === null ? '价格: 默认' : priceSort === 'asc' ? '价格: 升序 ↑' : '价格: 降序 ↓';
+  if (analysisData) renderAnalysisTable(analysisData.items, activeFilter);
 });
 // 回车同样触发筛选
 ['filter-price-min', 'filter-price-max'].forEach((id) => {
@@ -455,6 +463,9 @@ function renderAnalysisTable(items, filter) {
   let rows = items;
   if (filter) {
     rows = items.filter((it) => it.price >= filter.from && it.price < filter.to);
+  }
+  if (priceSort) {
+    rows = [...rows].sort((a, b) => priceSort === 'asc' ? a.price - b.price : b.price - a.price);
   }
   if (!rows.length) {
     tbody.innerHTML = '<tr><td colspan="7" class="empty">暂无商品数据</td></tr>';

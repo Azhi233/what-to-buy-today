@@ -345,6 +345,18 @@ class MonitorService:
         self.round_items = 0
         self.round_matches = 0
 
+        # 抓取量策略：每日首次检查全量（max_items_per_page，如 180）建立当日基线；
+        # 当日后续轮次只抓最新前 N 条（subsequent_max_items_per_page，如 60）——
+        # 商品更新频率不高，且新发布多为二道贩子重复发布，深翻页噪音大于价值。
+        first_round = not self.db.has_check_today()
+        if first_round:
+            cap = int(monitor.settings.get("max_items_per_page", 180))
+            logger.info("当日首次检查：全量抓取上限 %d", cap)
+        else:
+            cap = int(monitor.settings.get("subsequent_max_items_per_page", 60))
+            logger.info("当日后续检查：增量抓取上限 %d", cap)
+        monitor.settings["max_items_per_page"] = cap
+
         exc: Exception | None = None
         try:
             # 浏览器失效则抛错，由外层负责重启

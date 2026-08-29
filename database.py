@@ -439,6 +439,13 @@ class Database:
     def get_checks(self, limit: int = 100) -> list[sqlite3.Row]:
         return self._query("SELECT * FROM checks_log ORDER BY id DESC LIMIT ?", (limit,))
 
+    def has_check_today(self) -> bool:
+        """当日（北京时间）是否已有检查记录，用于判定"每日首轮全量抓取"。"""
+        rows = self._query(
+            "SELECT COUNT(*) AS c FROM checks_log WHERE date(check_time)=date('now','localtime')"
+        )
+        return rows[0]["c"] > 0 if rows else False
+
     def log_notification(self, item_id: str, keyword: str, title: str,
                          price: float, url: str, channel: str) -> None:
         self._execute(
