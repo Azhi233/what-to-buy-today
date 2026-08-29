@@ -4,6 +4,14 @@
 
 ## [Unreleased]
 
+### 服务器版（本地扫码模式）
+- `config.py`：新增 `MONITOR_KEYWORD` 单品环境变量覆盖——设置后仅监控该单商品（服务器场景），未设置保持默认列表；配套 `MONITOR_MAX_PRICE`/`MONITOR_MIN_PRICE`/`MONITOR_EXCLUDE_KEYWORDS`/`MONITOR_MUST_INCLUDE`
+- 新增 `tools/check_login.py`：本地扫码登录态自检脚本（解析 Chromium `unb`/`tracknick` cookie），上传服务器前确认已有效登录
+- 新增 `.env.server.example`：服务器版配置模板（DGX Spark 25000-30000，屏蔽询价/私聊，Xvfb 有头）
+- 新增 `docker-compose.server.yml`：服务器编排（本地扫码上传 `browser_profile`/`data` 后即可启动）
+- 新增 `deploy/server-deploy.md`：完整部署手册（本地扫码→上传→启动→运维）
+- `.gitignore`：追加 `.env.server`/`.env.local` 防泄漏
+
 ### 修复
 - 修复 `PRICE_ANOMALY_RATIO` 死配置：`evaluate_item` 两处调用均传入该配置，用户修改立即生效
 - 修复老商品重新评估漏传 `strict_unknown_credit`，与新商品路径配置保持一致

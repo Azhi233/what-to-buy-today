@@ -91,47 +91,63 @@ DASHBOARD_TOKEN = _env("DASHBOARD_TOKEN")
 
 # ═══════════════════════════════════════════
 #  监控商品列表 - 在这里添加你想监控的商品
+#  服务器单品模式：设置 MONITOR_KEYWORD 时仅监控该单商品（.env.server 场景），
+#  否则使用下方默认列表（桌面版/测试）。
 # ═══════════════════════════════════════════
-MONITOR_ITEMS = [
-    # 示例：监控 "iPhone 15 Pro Max"，期望价格 <= 5000，排除低价垃圾信息
-    {
-        "keyword": "iPhone 15 Pro Max",
-        "max_price": 5000,        # 最高接受价格（元）
-        "min_price": 500,         # 最低价格过滤（排除明显标错或骗局）
-        "exclude_keywords": [     # 标题包含这些关键词的商品跳过
-            "换屏", "爆屏", "拆机", "配件", "模型", "模型机",
-            "绑定id", "有锁", "卡贴", "扩容"
-        ],
-        # 必须包含词：标题必须包含这些词才视为同一配置/正品，
-        # 用于过滤配件、壳、贴膜等无关产品及不同配置，保证价格有参考意义。
-        # 留空 [] 表示不强制。
-        "must_include": ["国行", "256G"],
-    },
-    # 示例：监控 "MacBook Pro M3"
-    # {
-    #     "keyword": "MacBook Pro M3",
-    #     "max_price": 9000,
-    #     "min_price": 1000,
-    #     "exclude_keywords": ["配件", "模型", "外壳", "贴膜"],
-    #     "must_include": ["16G"],
-    # },
-    # 示例：监控 "索尼 A7M4"
-    # {
-    #     "keyword": "索尼 A7M4",
-    #     "max_price": 13000,
-    #     "min_price": 5000,
-    #     "exclude_keywords": ["配件", "镜头盖"],
-    #     "must_include": ["机身"],
-    # },
-    # 示例：监控 "任天堂 Switch OLED"
-    # {
-    #     "keyword": "任天堂 Switch OLED",
-    #     "max_price": 1500,
-    #     "min_price": 500,
-    #     "exclude_keywords": ["壳", "贴膜", "包", "卡带"],
-    #     "must_include": ["日版", "续航"],
-    # },
-]
+_MONITOR_KEYWORD = _env("MONITOR_KEYWORD", "")
+if _MONITOR_KEYWORD:
+    _exclude_raw = _env("MONITOR_EXCLUDE_KEYWORDS", "")
+    _must_raw = _env("MONITOR_MUST_INCLUDE", "")
+    MONITOR_ITEMS = [
+        {
+            "keyword": _MONITOR_KEYWORD,
+            "max_price": _env_int("MONITOR_MAX_PRICE", 5000),
+            "min_price": _env_int("MONITOR_MIN_PRICE", 0),
+            "exclude_keywords": [s.strip() for s in _exclude_raw.split(",") if s.strip()],
+            "must_include": [s.strip() for s in _must_raw.split(",") if s.strip()],
+        }
+    ]
+else:
+    MONITOR_ITEMS = [
+        # 示例：监控 "iPhone 15 Pro Max"，期望价格 <= 5000，排除低价垃圾信息
+        {
+            "keyword": "iPhone 15 Pro Max",
+            "max_price": 5000,        # 最高接受价格（元）
+            "min_price": 500,         # 最低价格过滤（排除明显标错或骗局）
+            "exclude_keywords": [     # 标题包含这些关键词的商品跳过
+                "换屏", "爆屏", "拆机", "配件", "模型", "模型机",
+                "绑定id", "有锁", "卡贴", "扩容"
+            ],
+            # 必须包含词：标题必须包含这些词才视为同一配置/正品，
+            # 用于过滤配件、壳、贴膜等无关产品及不同配置，保证价格有参考意义。
+            # 留空 [] 表示不强制。
+            "must_include": ["国行", "256G"],
+        },
+        # 示例：监控 "MacBook Pro M3"
+        # {
+        #     "keyword": "MacBook Pro M3",
+        #     "max_price": 9000,
+        #     "min_price": 1000,
+        #     "exclude_keywords": ["配件", "模型", "外壳", "贴膜"],
+        #     "must_include": ["16G"],
+        # },
+        # 示例：监控 "索尼 A7M4"
+        # {
+        #     "keyword": "索尼 A7M4",
+        #     "max_price": 13000,
+        #     "min_price": 5000,
+        #     "exclude_keywords": ["配件", "镜头盖"],
+        #     "must_include": ["机身"],
+        # },
+        # 示例：监控 "任天堂 Switch OLED"
+        # {
+        #     "keyword": "任天堂 Switch OLED",
+        #     "max_price": 1500,
+        #     "min_price": 500,
+        #     "exclude_keywords": ["壳", "贴膜", "包", "卡带"],
+        #     "must_include": ["日版", "续航"],
+        # },
+    ]
 
 # ═══════════════════════════════════════════
 #  卖家信用与防骗过滤

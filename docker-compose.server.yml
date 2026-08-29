@@ -1,0 +1,32 @@
+# ============================================================
+#  闲鱼监控 - 服务器版编排（本地扫码模式）
+# ============================================================
+# 前置：本地扫码 → 把 browser_profile/ 与 data/ 上传到服务器
+#       当前目录下创建 .env.server（模板见 .env.server.example）
+# 启动：docker compose -f docker-compose.server.yml up -d --build
+# 详情见 deploy/server-deploy.md
+# ============================================================
+services:
+  xianyu-monitor:
+    build: .
+    image: xianyu-monitor:latest
+    container_name: xianyu-monitor
+    ports:
+      - "5000:5000"
+    volumes:
+      # 必须：本地扫码上传的登录态与数据库
+      - ./browser_profile:/app/browser_profile
+      - ./data:/app/data
+    restart: unless-stopped
+    env_file:
+      - path: .env.server
+        required: false
+    environment:
+      - TZ=Asia/Shanghai
+    # 服务器有头浏览器由容器内 Xvfb 提供虚拟显示（规避闲鱼无头拦截）
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5000/api/healthz', timeout=5)"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 90s
