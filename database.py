@@ -151,6 +151,9 @@ class Database:
             self._conn.execute("ALTER TABLE items ADD COLUMN seller_credit TEXT DEFAULT ''")
         if "risk_flags" not in cols:
             self._conn.execute("ALTER TABLE items ADD COLUMN risk_flags TEXT DEFAULT ''")
+        if "disposition" not in cols:
+            # 分组：new=新发现待处理 / tracking=价格监测 / ignored=忽略
+            self._conn.execute("ALTER TABLE items ADD COLUMN disposition TEXT DEFAULT 'new'")
 
         pcols = [r["name"] for r in self._conn.execute("PRAGMA table_info(monitored_products)")]
         if "must_include" not in pcols:
@@ -363,6 +366,15 @@ class Database:
     def mark_notified(self, item_id: str) -> None:
         self._execute("UPDATE items SET notified=1 WHERE item_id=?", (item_id,))
 
+    def set_item_disposition(self, item_id: str, disposition: str) -> None:
+        """设置商品分组：new(待处理) / tracking(价格监测) / ignored(忽略)。"""
+        if disposition not in ("new", "tracking", "ignored"):
+            raise ValueError(f"无效分组: {disposition}")
+        self._execute(
+            "UPDATE items SET disposition=? WHERE item_id=?",
+            (disposition, item_id),
+        )
+
     def get_keywords(self) -> list[str]:
         rows = self._query("SELECT DISTINCT keyword FROM items ORDER BY keyword")
         return [r["keyword"] for r in rows]
@@ -458,6 +470,22 @@ class Database:
         return self._query(
             "SELECT * FROM notifications ORDER BY id DESC LIMIT ?", (limit,)
         )
+
+    def clear_notifications(self) -> int:
+        """清空通知记录。仅删除通知日志，不影响 items.notified —— 已通知过的商品不会重复推送。"""
+        with self._lock:
+            cur = self._conn.execute("DELETE FROM notifications")
+            self._conn.commit()
+            return cur.rowcount
+
+    def clear_notifications_before(self, before: str) -> int:
+        """清除某时间点之前的所有通知记录（before 格式 'YYYY-MM-DD HH:MM:SS'）。"""
+        with self._lock:
+            cur = self._conn.execute(
+                "DELETE FROM notifications WHERE time < ?", (before,)
+            )
+            self._conn.commit()
+            return cur.rowcount
 
     # ─────────────────────────────────────
     #  保留策略与清理（B1）

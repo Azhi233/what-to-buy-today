@@ -282,6 +282,7 @@ let analysisData = null;
 let distChart = null;
 let trendChart = null;
 let activeFilter = null;
+let analysisGroup = 'all';
 let priceSort = null; // null=默认 | 'asc' | 'desc'
 
 $('#analysis-keyword').addEventListener('change', () => {
@@ -307,6 +308,37 @@ $('#btn-sort-price').addEventListener('click', () => {
   $('#btn-sort-price').textContent =
     priceSort === null ? '价格: 默认' : priceSort === 'asc' ? '价格: 升序 ↑' : '价格: 降序 ↓';
   if (analysisData) renderAnalysisTable(analysisData.items, activeFilter);
+});
+// 分组 tabs：全部 / 待处理 / 价格监测 / 忽略
+document.querySelectorAll('#analysis-groups .group-tab').forEach((btn) => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('#analysis-groups .group-tab').forEach((b) => b.classList.remove('active'));
+    btn.classList.add('active');
+    analysisGroup = btn.dataset.group;
+    if (analysisData) renderAnalysisTable(analysisData.items, activeFilter);
+  });
+});
+// 归档 / 忽略 / 恢复：本地更新 disposition，不整页刷新（重复搜索不影响分组）
+$('#analysis-table tbody').addEventListener('click', async (e) => {
+  const btn = e.target.closest('[data-act]');
+  if (!btn) return;
+  const itemId = btn.dataset.id;
+  const act = btn.dataset.act;
+  try {
+    const r = await api(`/api/items/${encodeURIComponent(itemId)}/disposition`, {
+      method: 'POST',
+      body: JSON.stringify({ action: act }),
+    });
+    if (!r.ok) { toast(r.error || '操作失败', true); return; }
+    if (analysisData) {
+      const it = analysisData.items.find((x) => x.item_id === itemId);
+      if (it) it.disposition = r.disposition;
+      renderAnalysisTable(analysisData.items, activeFilter);
+    }
+    toast(act === 'track' ? '已归档到价格监测' : act === 'ignore' ? '已忽略（折叠）' : '已恢复待处理');
+  } catch (err) {
+    toast('操作失败: ' + err.message, true);
+  }
 });
 // 回车同样触发筛选
 ['filter-price-min', 'filter-price-max'].forEach((id) => {
@@ -464,25 +496,40 @@ function renderAnalysisTable(items, filter) {
   if (filter) {
     rows = items.filter((it) => it.price >= filter.from && it.price < filter.to);
   }
+  if (analysisGroup !== 'all') {
+    rows = rows.filter((it) => (it.disposition || 'new') === analysisGroup);
+  }
   if (priceSort) {
     rows = [...rows].sort((a, b) => priceSort === 'asc' ? a.price - b.price : b.price - a.price);
   }
   if (!rows.length) {
-    tbody.innerHTML = '<tr><td colspan="7" class="empty">暂无商品数据</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="8" class="empty">暂无商品数据</td></tr>';
     return;
   }
   rows = rows.slice(0, 100);
-  tbody.innerHTML = rows.map((it) => `
-    <tr>
+  tbody.innerHTML = rows.map((it) => {
+    const disp = it.disposition || 'new';
+    const isNew = disp === 'new';
+    const rowCls = disp === 'ignored' ? ' class="row-ignored"' : '';
+    const titleText = esc(it.title.slice(0, 45)) + (it.title.length > 45 ? '…' : '');
+    const ops = isNew
+      ? `<button class="btn btn-mini" data-act="track" data-id="${esc(it.item_id)}">归档</button>
+         <button class="btn btn-mini btn-ghost" data-act="ignore" data-id="${esc(it.item_id)}">忽略</button>`
+      : disp === 'tracking'
+        ? `<span class="badge badge-yes">监测中</span>
+           <button class="btn btn-mini btn-ghost" data-act="ignore" data-id="${esc(it.item_id)}">忽略</button>`
+        : `<button class="btn btn-mini btn-ghost" data-act="restore" data-id="${esc(it.item_id)}">恢复</button>`;
+    return `<tr${rowCls}>
       <td class="price">${fmtPrice(it.price)}</td>
-      <td title="${esc(it.title)}">${esc(it.title.slice(0, 45))}${it.title.length > 45 ? '…' : ''}</td>
+      <td title="${esc(it.title)}">${isNew ? '<span class="tag-new">NEW </span>' : ''}${titleText}</td>
       <td>${esc(it.location || '—')}</td>
       <td>${it.seller_credit ? esc(it.seller_credit) : '—'}</td>
       <td>${esc(it.status || '—')}</td>
       <td>${esc(it.first_seen || '')}</td>
       <td><span class="badge ${it.notified ? 'badge-yes' : 'badge-no'}">${it.notified ? '已推送' : '未推送'}</span></td>
-      <td><a class="item-link" href="${esc(it.url)}" target="_blank">打开商品 →</a></td>
-    </tr>`).join('');
+      <td>${ops} <a class="item-link" href="${esc(it.url)}" target="_blank">打开商品 →</a></td>
+    </tr>`;
+  }).join('');
 }
 
 /* ───────── 降价记录 ───────── */
@@ -538,6 +585,30 @@ $('#btn-test-notify').addEventListener('click', async () => {
   } catch (e) {
     toast('发送失败: ' + e.message, true);
   }
+});
+// 清空所有通知记录（仅删通知日志；已通知标记保留，不重复推送）
+$('#btn-clear-all').addEventListener('click', async () => {
+  if (!confirm('确定清空所有通知记录？（已通知过的商品不会重复推送）')) return;
+  try {
+    const r = await api('/api/notifications/clear', { method: 'POST' });
+    toast(`已清空 ${r.deleted} 条通知`);
+    loadNotifications();
+  } catch (e) { toast('清空失败: ' + e.message, true); }
+});
+// 清除某时间之前的通知记录
+$('#btn-clear-before').addEventListener('click', async () => {
+  const v = $('#notify-clear-before').value;
+  if (!v) { toast('请先选择日期时间', true); return; }
+  const before = v.replace('T', ' ') + ':00';
+  if (!confirm(`确定清除 ${before} 之前的通知？（已通知过的商品不会重复推送）`)) return;
+  try {
+    const r = await api('/api/notifications/clear-before', {
+      method: 'POST',
+      body: JSON.stringify({ before }),
+    });
+    toast(`已清除 ${r.deleted} 条通知`);
+    loadNotifications();
+  } catch (e) { toast('清除失败: ' + e.message, true); }
 });
 
 /* ───────── 设置 ───────── */

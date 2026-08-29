@@ -317,6 +317,23 @@ def api_notifications():
     return jsonify([dict(r) for r in rows])
 
 
+@app.route("/api/notifications/clear", methods=["POST"])
+def api_clear_notifications():
+    """清空所有通知记录（不影响已通知标记，已通知过的不重复推送）。"""
+    n = db.clear_notifications()
+    return jsonify({"ok": True, "deleted": n})
+
+
+@app.route("/api/notifications/clear-before", methods=["POST"])
+def api_clear_notifications_before():
+    """清除某时间点之前的所有通知记录（body: {"before": "YYYY-MM-DD HH:MM:SS"}）。"""
+    before = (request.get_json(silent=True) or {}).get("before", "").strip()
+    if not before:
+        return jsonify({"ok": False, "error": "缺少 before 时间参数"}), 400
+    n = db.clear_notifications_before(before)
+    return jsonify({"ok": True, "deleted": n, "before": before})
+
+
 @app.route("/api/checks")
 def api_checks():
     rows = db.get_checks(limit=100)
@@ -597,6 +614,25 @@ def api_cleanup():
     return jsonify({"ok": True, "stats": stats, "retention": r})
 
 
+# ─────────────────────────────────────────────
+#  商品归档 / 忽略
+# ─────────────────────────────────────────────
+
+@app.route("/api/items/<item_id>/disposition", methods=["POST"])
+def api_set_item_disposition(item_id: str):
+    """设置商品分组：track=价格监测 / ignore=忽略 / restore=恢复待处理。"""
+    action = (request.get_json(silent=True) or {}).get("action", "")
+    mapping = {"track": "tracking", "ignore": "ignored", "restore": "new"}
+    disposition = mapping.get(action)
+    if not disposition:
+        return jsonify({"ok": False, "error": "无效动作（track/ignore/restore）"}), 400
+    row = db.get_item(item_id)
+    if not row:
+        return jsonify({"ok": False, "error": "商品不存在"}), 404
+    db.set_item_disposition(item_id, disposition)
+    return jsonify({"ok": True, "item_id": item_id, "disposition": disposition})
+
+
 @app.route("/api/clear-items", methods=["POST"])
 def api_clear_items():
     db.clear_items()
@@ -626,6 +662,7 @@ def _item_json(row) -> dict:
         "seller_credit": row["seller_credit"] or "",
         "risk_flags": row["risk_flags"] or "",
         "notified": bool(row["notified"]),
+        "disposition": row["disposition"] if "disposition" in row.keys() else "new",
         "first_seen": row["first_seen"],
         "last_seen": row["last_seen"],
     }

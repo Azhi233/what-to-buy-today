@@ -143,6 +143,21 @@ body {
 .btn-ghost { background: transparent; border-color: var(--border); color: var(--text-dim); }
 .btn-ghost:hover { border-color: var(--accent); color: var(--text); }
 
+/* ───── 商品分组 tabs ───── */
+.group-tabs { display: flex; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
+.group-tab {
+  background: var(--panel-2); border: 1px solid var(--border); color: var(--text-dim);
+  padding: 5px 14px; border-radius: 999px; font-size: 12px; cursor: pointer; transition: all .15s;
+}
+.group-tab:hover { border-color: var(--accent); color: var(--text); }
+.group-tab.active { background: var(--accent-2); border-color: var(--accent-2); color: #fff; }
+
+/* ───── 通知清除栏 ───── */
+.notify-clear-bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.tag-new { color: var(--accent-2); font-weight: 700; }
+.row-ignored { opacity: .45; }
+.btn-mini { padding: 2px 8px; font-size: 11px; }
+
 /* ───── 表单 ───── */
 .form-row { display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap; }
 .form-group { display: flex; flex-direction: column; gap: 5px; }

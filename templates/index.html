@@ -136,9 +136,15 @@
             <button class="btn btn-sm" id="btn-sort-price" title="点击切换 默认/升序/降序">价格: 默认</button>
             <span class="hint" id="items-count"></span>
           </div>
+          <div class="group-tabs" id="analysis-groups">
+            <button class="group-tab active" data-group="all">全部</button>
+            <button class="group-tab" data-group="new">待处理</button>
+            <button class="group-tab" data-group="tracking">价格监测</button>
+            <button class="group-tab" data-group="ignored">忽略</button>
+          </div>
           <div class="table-wrap">
             <table class="table" id="analysis-table">
-              <thead><tr><th>价格</th><th>标题</th><th>地区</th><th>信用</th><th>成色/状态</th><th>首次发现</th><th>是否已推送</th><th></th></tr></thead>
+              <thead><tr><th>价格</th><th>标题</th><th>地区</th><th>信用</th><th>成色/状态</th><th>首次发现</th><th>是否已推送</th><th>操作</th></tr></thead>
               <tbody></tbody>
             </table>
           </div>
@@ -163,7 +169,12 @@
         <div class="panel">
           <div class="panel-header">
             <h3>通知记录</h3>
-            <button class="btn btn-sm" id="btn-test-notify">发送测试通知</button>
+            <div class="notify-clear-bar">
+              <input type="datetime-local" class="price-filter-input" id="notify-clear-before" title="清除该时间之前的通知">
+              <button class="btn btn-sm" id="btn-clear-before">清除该时间前</button>
+              <button class="btn btn-sm btn-danger" id="btn-clear-all">清空所有通知</button>
+              <button class="btn btn-sm" id="btn-test-notify">发送测试通知</button>
+            </div>
           </div>
           <div class="table-wrap">
             <table class="table" id="notifications-table">
