@@ -8,6 +8,11 @@ set -e
 
 RUNAS_ID=$(id -u pwuser 2>/dev/null || echo 1000)
 
+# 时区：显式设为北京时间并写入 /etc/localtime（TZ env + tzdata 时生效；
+# 确保 date / python localtime 均按东八区输出，避免关键的"上次检查"等时间偏差 8 小时）
+export TZ="${TZ:-Asia/Shanghai}"
+ln -sf /usr/share/zoneinfo/Asia/Shanghai /etc/localtime 2>/dev/null || true
+
 # ── 0. 清理上次退出可能残留的锁文件（跨容器重启会遗留，导致新实例拒绝启动）──
 # Xvfb 显示锁：stop/start（不重建容器）时 /tmp 保留，不清理则 Xvfb 报 "already active"
 rm -f /tmp/.X99-lock 2>/dev/null || true

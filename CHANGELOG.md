@@ -26,6 +26,10 @@
 - `entrypoint.sh` 启动时清理两类残留锁：`/tmp/.X99-lock`（`docker stop/start` 不重建容器时残留，会导致 Xvfb 报 "already active"）与 `browser_profile` 的 `Singleton*`/`DevToolsActivePort`（`docker down/up` 重建时卷残留，会导致 Chromium 报 "profile in use by another process"）——根治跨容器重启后监控浏览器起不来的问题
 - `static/app.js` 支持 `?token=` URL 注入并写入 localStorage：远程浏览器访问 `http://host:5000/?token=xxx` 后 API 自动携带 `X-Auth-Token`，仪表盘无需手动设置 token 即可加载
 
+### 时区修复（容器时间比北京慢 8 小时）
+- 根因：playwright/jammy 基础镜像缺 `tzdata`，`TZ=Asia/Shanghai` 解析失败回退 UTC，导致日志与"上次检查"等时间戳比北京慢 8 小时（显示 10:xx 实为 18:xx 北京）
+- `Dockerfile` 安装 `tzdata`；`entrypoint.sh` 显式 `export TZ=Asia/Shanghai` 并写入 `/etc/localtime`，日志与仪表盘时间统一为北京时间
+
 ### 修复
 - 修复 `PRICE_ANOMALY_RATIO` 死配置：`evaluate_item` 两处调用均传入该配置，用户修改立即生效
 - 修复老商品重新评估漏传 `strict_unknown_credit`，与新商品路径配置保持一致
