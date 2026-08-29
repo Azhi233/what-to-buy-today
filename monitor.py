@@ -535,9 +535,7 @@ class GoofishMonitor:
     def _build_search_url(self, keyword: str) -> str:
         """构建搜索 URL。"""
         from urllib.parse import quote
-        base = f"https://www.goofish.com/search?q={quote(keyword)}"
-        # 排序参数可能触发风控，默认不加（综合排序）
-        return base
+        return f"https://www.goofish.com/search?q={quote(keyword)}"
 
     async def _extract_from_dom(self, page: Page, wan_scale: bool = False,
                                 max_price: float = 0, min_price: float = 0) -> list[dict]:
@@ -639,22 +637,46 @@ class GoofishMonitor:
             # 等待渲染稳定
             await self._human_delay(2.0, 4.0)
 
-            # 模拟滚动加载更多
-            await self._scroll_and_collect(page)
+            max_items = self.settings.get("max_items_per_page", 60)
 
-            # DOM 解析（主要）；万元判定由显式“万”或 max_price 量级共同确认
-            dom_items = await self._extract_from_dom(
-                page, wan_scale=True, max_price=max_price, min_price=min_price,
-            )
+            # 1) 切到"新发布"（最新）排序：更符合"盯最新上架"需求
+            await self._click_label_filter(page, "新发布")
 
-            # 合并 API 数据（补充字段）
-            all_items = self._merge_items(dom_items)
+            # 2) 设置价格范围（如果配置了价格区间），服务端只返回区间内商品
+            if min_price > 0 or max_price > 0:
+                await self._set_price_range(page, min_price, max_price)
+
+            # 3) 翻页抓取：一直翻到最后一页 / 达到上限 / 翻页失效
+            all_items: list[dict] = []
+            seen_ids: set[str] = set()
+            page_total = 1  # 分页指示 "当前/总数"，未知时按 1 处理
+            for _round in range(self.settings.get("max_scrape_pages", 30)):
+                # DOM 解析（主要）；万元判定由显式“万”或 max_price 量级共同确认
+                dom_items = await self._extract_from_dom(
+                    page, wan_scale=True, max_price=max_price, min_price=min_price,
+                )
+                merged = self._merge_items(dom_items)
+                new_ones = [i for i in merged if i["item_id"] not in seen_ids]
+                seen_ids.update(i["item_id"] for i in merged)
+                all_items.extend(new_ones)
+
+                page_total = await self._current_page_total(page, page_total)
+
+                # 提前结束：收集足够多 / 已到最后一页
+                if len(all_items) >= max_items or page_total <= 1:
+                    break
+                if _round + 1 >= page_total:
+                    break
+
+                # 点下一页（最后一个非禁用的 tiny 箭头 = 右箭头）
+                if not await self._click_next_page(page):
+                    break
+                await self._human_delay(1.5, 3.0)
 
             # 按关键词过滤，剔除"猜你喜欢"推荐区的无关商品
             all_items = [i for i in all_items if matches_keyword(i["title"], keyword)]
 
             # 限制数量
-            max_items = self.settings.get("max_items_per_page", 60)
             all_items = all_items[:max_items]
 
             logger.info(f"搜索 {keyword} 共提取 {len(all_items)} 条商品")
@@ -675,6 +697,77 @@ class GoofishMonitor:
                         await page.close()
                 except Exception:
                     pass
+
+    @staticmethod
+    async def _click_label_filter(page: Page, label: str) -> None:
+        """点击筛选栏中的文本标签（如"新发布"排序）。类名带随机后缀，按文本精确匹配。"""
+        try:
+            el = page.get_by_text(label, exact=True).first
+            await el.click(force=True, timeout=8000)
+            await page.wait_for_timeout(2500)
+        except Exception:
+            logger.debug(f"筛选标签 {label} 点击失败（可能不存在）")
+
+    @staticmethod
+    async def _set_price_range(page: Page, min_price: float, max_price: float) -> None:
+        """在搜索页价格输入框填入区间并点"确定"（服务端过滤，分页总量随之缩小）。"""
+        try:
+            inputs = page.locator("input")
+            n = await inputs.count()
+            if n < 3:
+                return
+            if min_price > 0:
+                await inputs.nth(1).fill(str(int(min_price)))
+            if max_price > 0:
+                await inputs.nth(2).fill(str(int(max_price)))
+            await page.wait_for_timeout(400)
+            # "确定"按钮可能在视口外，用 JS click 绕过
+            await page.evaluate("""() => {
+                const b = [...document.querySelectorAll('button')]
+                    .find(x => x.textContent.trim() === '确定');
+                if (b) b.click();
+            }""")
+            await page.wait_for_timeout(3500)
+        except Exception as e:
+            logger.debug(f"设置价格范围失败: {e}")
+
+    @staticmethod
+    async def _current_page_total(page: Page, fallback: int) -> int:
+        """读取分页指示 "当前/总数"（如 2/11），失败时返回 fallback。"""
+        try:
+            txt = await page.evaluate("""() => {
+                const el = [...document.querySelectorAll('*')]
+                    .find(e => /^\\s*\\d+\\s*\\/\\s*\\d+\\s*$/.test(e.textContent));
+                return el ? el.textContent.trim() : '';
+            }""")
+            if "/" in txt:
+                parts = txt.split("/")
+                if len(parts) == 2 and parts[1].strip().isdigit():
+                    return int(parts[1].strip())
+        except Exception:
+            pass
+        return fallback
+
+    @staticmethod
+    async def _click_next_page(page: Page) -> bool:
+        """点下一页：tiny 版分页的右箭头（最后一个非禁用的 search-page-tiny-arrow-container 按钮）。"""
+        try:
+            btns = page.locator('button[class*="search-page-tiny-arrow-container"]')
+            n = await btns.count()
+            # 右箭头是最后一个按钮
+            for i in range(n - 1, -1, -1):
+                if not await btns.nth(i).is_disabled():
+                    await btns.nth(i).click(force=True, timeout=8000)
+                    return True
+        except Exception:
+            pass
+        # 兜底：桌面版分页的"下一页"文本按钮
+        try:
+            nxt = page.get_by_text("下一页", exact=True).first
+            await nxt.click(force=True, timeout=5000)
+            return True
+        except Exception:
+            return False
 
     async def _scroll_and_collect(self, page: Page) -> None:
         """模拟人类滚动页面，触发懒加载。

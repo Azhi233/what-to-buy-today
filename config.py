@@ -300,4 +300,8 @@ MONITOR_SETTINGS = {
     # 搜索页滚动轮次：闲鱼为瀑布流无限滚动，轮次越多抓到的商品越多
     # （同时请求也越多）。建议 6~10；设为 0 表示不滚动（仅首屏）。
     "scroll_rounds": _env_int("MONITOR_SCROLL_ROUNDS", 6),
+
+    # 搜索结果翻页上限：按"最新 + 价格区间"翻页抓取时的最大页数
+    # （保护：防止异常情况下无限翻页造成过多请求；价格筛选后一般仅几页）
+    "max_scrape_pages": _env_int("MONITOR_MAX_SCRAPE_PAGES", 30),
 }
