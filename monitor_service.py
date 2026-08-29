@@ -83,6 +83,8 @@ def seed_products_from_config(db: Database) -> int:
             min_price=item.get("min_price", 0),
             exclude_keywords=",".join(item.get("exclude_keywords", [])),
             must_include=",".join(item.get("must_include", [])),
+            push_min_price=item.get("push_min_price", 0),
+            push_max_price=item.get("push_max_price", 0),
             enabled=1,
         )
         count += 1
@@ -407,6 +409,10 @@ class MonitorService:
         min_price = product["min_price"] or 0
         exclude_keywords = parse_exclude_keywords(product["exclude_keywords"] or "")
         must_include = parse_exclude_keywords(product["must_include"] or "")
+        # 推送价格区间：仅在区间内的商品才推送通知；区间外（监测区间内）只记录进市场分析。
+        # 留空（0）时回退到监测区间 = 与监测区间一致（全部推送）。
+        push_min = float(product["push_min_price"] or 0) or min_price
+        push_max = float(product["push_max_price"] or 0) or max_price
 
         items = await monitor.search(
             keyword,
@@ -522,32 +528,40 @@ class MonitorService:
         for item in price_drop_notices:
             row = self.db.get_item(item["item_id"])
             if row:
+                # 仅当降价后价格进入推送区间才推送；监测区间内的普通降价只记录进降价模块
+                price = float(item.get("price") or 0)
+                if not (push_min <= price <= push_max):
+                    logger.info(f"[{keyword}] 降价但未进入推送区间，仅记录降价: {item['item_id']}")
+                    continue
                 change = self.db.get_last_price_change(item["item_id"])
                 old_price = change["old_price"] if change else None
                 if old_price is not None:
                     await self._notify_drop(item, keyword, old_price)
 
         # 推送新匹配商品 — B4: 单轮>10条合并为摘要，避免 Bark/邮件 风暴
-        # 只推送新增商品：已推送过（notified=1）的不再重复推送（幂等保障）
+        # 只推送"新增 + 价格在推送区间内"的商品：
+        #   · 监测区间内、推送区间外 → 只入库记录（市场分析可见），不推送
+        #   · 已推送过（notified=1）的不再重复推送（幂等保障）
         notified_count = 0
-        matches = [
+        push_matches = [
             it for it in matches
-            if not (self.db.get_item(it["item_id"]) or {}).get("notified")
+            if push_min <= float(it.get("price") or 0) <= push_max
+            and not (self.db.get_item(it["item_id"]) or {}).get("notified")
         ]
-        if len(matches) > BATCH_SUMMARY_THRESHOLD:
+        if len(push_matches) > BATCH_SUMMARY_THRESHOLD:
             # 全部标记已推送
-            for it in matches:
+            for it in push_matches:
                 self.db.mark_notified(it["item_id"])
-            summary_title, summary_content = BarkNotifier.build_summary_payload(matches, keyword)
+            summary_title, summary_content = BarkNotifier.build_summary_payload(push_matches, keyword)
             # 复用统一发送（所有启用的渠道）；url 置空，摘要里提示看仪表盘
             ok_list = await asyncio.to_thread(self.notifier.send, summary_title, summary_content, "")
             ok = bool(ok_list)
-            for it in matches:
+            for it in push_matches:
                 self.db.log_notification(it["item_id"], keyword, it["title"], it["price"], it.get("url",""), "推送(摘要)" if ok else "控制台(摘要)")
-            notified_count = len(matches) if ok else 0
-            logger.info(f"[{keyword}] 单轮 {len(matches)} 条匹配过多，已合并为摘要推送")
+            notified_count = len(push_matches) if ok else 0
+            logger.info(f"[{keyword}] 单轮 {len(push_matches)} 条匹配过多，已合并为摘要推送")
         else:
-            for item in matches:
+            for item in push_matches:
                 self.db.mark_notified(item["item_id"])
                 if await self._notify_match(item, keyword):
                     notified_count += 1
@@ -565,9 +579,10 @@ class MonitorService:
             top = sorted(reason_count.items(), key=lambda x: -x[1])[:3]
             filtered_detail = "，过滤 " + "、".join(f"{r}×{c}" for r, c in top)
 
-        msg = f"新增 {len(matches)} 条匹配，{len(price_drop_notices)} 条降价{filtered_detail}"
+        outside_push = len(matches) - len(push_matches)
+        msg = f"新增 {len(matches)} 条匹配（推送 {len(push_matches)} 条），{len(price_drop_notices)} 条降价{filtered_detail}"
         self.db.log_check(keyword, "ok", len(items), len(matches), msg)
-        logger.info(f"[{keyword}] 共 {len(items)} 条，匹配 {len(matches)} 条，降价 {len(price_drop_notices)} 条{filtered_detail}")
+        logger.info(f"[{keyword}] 共 {len(items)} 条，匹配 {len(matches)} 条（推送区间外 {outside_push}），降价 {len(price_drop_notices)} 条{filtered_detail}")
 
     # ─────────────────────────────────────
     #  通知

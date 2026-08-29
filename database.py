@@ -158,6 +158,10 @@ class Database:
         pcols = [r["name"] for r in self._conn.execute("PRAGMA table_info(monitored_products)")]
         if "must_include" not in pcols:
             self._conn.execute("ALTER TABLE monitored_products ADD COLUMN must_include TEXT DEFAULT ''")
+        if "push_min_price" not in pcols:
+            self._conn.execute("ALTER TABLE monitored_products ADD COLUMN push_min_price REAL DEFAULT 0")
+        if "push_max_price" not in pcols:
+            self._conn.execute("ALTER TABLE monitored_products ADD COLUMN push_max_price REAL DEFAULT 0")
 
         hcols = [r["name"] for r in self._conn.execute("PRAGMA table_info(price_history)")]
         if "filtered_avg" not in hcols:
@@ -210,21 +214,27 @@ class Database:
 
     def add_product(self, keyword: str, max_price: float, min_price: float = 0,
                     exclude_keywords: str = "", enabled: int = 1,
-                    must_include: str = "") -> int:
+                    must_include: str = "",
+                    push_min_price: float = 0, push_max_price: float = 0) -> int:
         cur = self._execute(
-            "INSERT INTO monitored_products (keyword, max_price, min_price, exclude_keywords, must_include, enabled)"
-            " VALUES (?, ?, ?, ?, ?, ?)",
-            (keyword, max_price, min_price, exclude_keywords, must_include, enabled),
+            "INSERT INTO monitored_products (keyword, max_price, min_price, exclude_keywords,"
+            " must_include, enabled, push_min_price, push_max_price)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (keyword, max_price, min_price, exclude_keywords, must_include, enabled,
+             push_min_price or 0, push_max_price or 0),
         )
         return cur.lastrowid
 
     def update_product(self, product_id: int, keyword: str, max_price: float,
                        min_price: float, exclude_keywords: str,
-                       must_include: str = "") -> None:
+                       must_include: str = "",
+                       push_min_price: float = 0, push_max_price: float = 0) -> None:
         self._execute(
-            "UPDATE monitored_products SET keyword=?, max_price=?, min_price=?, exclude_keywords=?, must_include=?"
+            "UPDATE monitored_products SET keyword=?, max_price=?, min_price=?,"
+            " exclude_keywords=?, must_include=?, push_min_price=?, push_max_price=?"
             " WHERE id=?",
-            (keyword, max_price, min_price, exclude_keywords, must_include, product_id),
+            (keyword, max_price, min_price, exclude_keywords, must_include,
+             push_min_price or 0, push_max_price or 0, product_id),
         )
 
     def delete_product(self, product_id: int) -> None:

@@ -84,7 +84,9 @@
               <div class="form-group grow"><label>关键词</label><input id="pf-keyword" placeholder="如: 索尼 A7M4" required></div>
               <div class="form-group"><label>最高价格 ¥</label><input id="pf-max" type="number" min="1" step="0.01" placeholder="13000" required></div>
               <div class="form-group"><label>最低价格 ¥</label><input id="pf-min" type="number" min="0" step="0.01" placeholder="500"></div>
-              <div class="form-group"><label>排除关键词</label><input id="pf-exclude" placeholder="换屏,拆机,模型机"></div>
+              <div class="form-group"><label>推送最高价 ¥</label><input id="pf-push-max" type="number" min="0" step="0.01" placeholder="可空=同监测价"></div>
+              <div class="form-group"><label>推送最低价 ¥</label><input id="pf-push-min" type="number" min="0" step="0.01" placeholder="可空=同监测价"></div>
+            <div class="form-group"><label>排除关键词</label><input id="pf-exclude" placeholder="换屏,拆机,模型机"></div>
             <div class="form-group"><label>必须包含词</label><input id="pf-must" placeholder="国行,256G（区分配置,可空）"></div>
               <button type="submit" class="btn btn-primary form-submit">添加</button>
             </div>
@@ -303,6 +305,10 @@
       <div class="form-row">
         <div class="form-group"><label>最高价格 ¥</label><input id="me-max" type="number" min="1" step="0.01" required></div>
         <div class="form-group"><label>最低价格 ¥</label><input id="me-min" type="number" min="0" step="0.01"></div>
+      </div>
+      <div class="form-row">
+        <div class="form-group"><label>推送最高价 ¥（区间内才推送，可空=同监测价）</label><input id="me-push-max" type="number" min="0" step="0.01"></div>
+        <div class="form-group"><label>推送最低价 ¥（可空=同监测价）</label><input id="me-push-min" type="number" min="0" step="0.01"></div>
       </div>
       <div class="form-group"><label>排除关键词</label><input id="me-exclude" placeholder="换屏,拆机,模型机"></div>
       <div class="form-group"><label>必须包含词（区分配置/正品，可空）</label><input id="me-must" placeholder="国行,256G"></div>

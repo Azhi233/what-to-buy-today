@@ -201,6 +201,8 @@ def api_products():
             "keyword": row["keyword"],
             "max_price": row["max_price"],
             "min_price": row["min_price"],
+            "push_min_price": row["push_min_price"] or 0,
+            "push_max_price": row["push_max_price"] or 0,
             "exclude_keywords": row["exclude_keywords"],
             "must_include": row["must_include"] or "",
             "enabled": bool(row["enabled"]),
@@ -215,7 +217,8 @@ def api_add_product():
     if err:
         return jsonify(err[0]), err[1]
     pid = db.add_product(payload["keyword"], payload["max_price"], payload["min_price"],
-                         payload["exclude_keywords"], 1, payload["must_include"])
+                         payload["exclude_keywords"], 1, payload["must_include"],
+                         payload["push_min_price"], payload["push_max_price"])
     return jsonify({"ok": True, "id": pid})
 
 
@@ -227,16 +230,25 @@ def _validate_price_pair(data, require_keyword: bool):
     try:
         max_price = float(data.get("max_price", 0))
         min_price = float(data.get("min_price", 0))
+        push_max = float(data.get("push_max_price", 0) or 0)
+        push_min = float(data.get("push_min_price", 0) or 0)
     except (TypeError, ValueError):
         return None, ({"ok": False, "error": "价格格式错误"}, 400)
     if max_price <= 0:
         return None, ({"ok": False, "error": "最高价格必须大于 0"}, 400)
     if min_price < 0 or min_price > max_price:
         return None, ({"ok": False, "error": "最低价格必须在 0 到最高价格之间"}, 400)
+    # 推送区间校验：必须落在监测区间内（留空=与监测区间一致）
+    eff_push_min = push_min if push_min > 0 else min_price
+    eff_push_max = push_max if push_max > 0 else max_price
+    if eff_push_min < min_price or eff_push_max > max_price or eff_push_min > eff_push_max:
+        return None, ({"ok": False, "error": "推送价格区间必须在监测价格区间内"}, 400)
     return {
         "keyword": keyword,
         "max_price": max_price,
         "min_price": min_price,
+        "push_min_price": push_min,
+        "push_max_price": push_max,
         "exclude_keywords": data.get("exclude_keywords", "") or "",
         "must_include": data.get("must_include", "") or "",
     }, None
@@ -248,7 +260,8 @@ def api_update_product(pid):
     if err:
         return jsonify(err[0]), err[1]
     db.update_product(pid, payload["keyword"], payload["max_price"], payload["min_price"],
-                      payload["exclude_keywords"], payload["must_include"])
+                      payload["exclude_keywords"], payload["must_include"],
+                      payload["push_min_price"], payload["push_max_price"])
     return jsonify({"ok": True})
 
 
@@ -298,6 +311,20 @@ def api_analysis():
         "distribution": _calc_distribution([r["price"] for r in items]),
         "trend": _calc_trend(db, keyword if keyword != "all" else ""),
     }
+    # 推送价格区间（供图表绘制推送线）：匹配当前关键词的产品配置
+    push_min = push_max = None
+    products = db.get_products(enabled_only=True)
+    for p in products:
+        if p["keyword"] == keyword:
+            push_min = p["push_min_price"] or p["min_price"]
+            push_max = p["push_max_price"] or p["max_price"]
+            break
+    if push_min is None and keyword == "all" and len(products) == 1:
+        p = products[0]
+        push_min = p["push_min_price"] or p["min_price"]
+        push_max = p["push_max_price"] or p["max_price"]
+    data["push_min_price"] = push_min
+    data["push_max_price"] = push_max
     return jsonify(data)
 
 

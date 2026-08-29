@@ -131,7 +131,7 @@ async function loadProducts() {
     const list = await api('/api/products');
     const tbody = $('#products-table tbody');
     if (!list.length) {
-      tbody.innerHTML = '<tr><td colspan="6" class="empty">还没有监控商品，用上面的表单添加</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="8" class="empty">还没有监控商品，用上面的表单添加</td></tr>';
       return;
     }
     tbody.innerHTML = list.map((p) => `
@@ -139,6 +139,7 @@ async function loadProducts() {
         <td><span class="badge ${p.enabled ? 'badge-yes' : 'badge-off'}">${p.enabled ? '监控中' : '已停用'}</span></td>
         <td><strong>${esc(p.keyword)}</strong></td>
         <td class="price">${fmtPrice(p.min_price)} ~ ${fmtPrice(p.max_price)}</td>
+        <td class="price">推送 ${fmtPrice(p.push_min_price || p.min_price)} ~ ${fmtPrice(p.push_max_price || p.max_price)}</td>
         <td>${esc(p.exclude_keywords || '—')}</td>
         <td>${esc(p.must_include || '—')}</td>
         <td>${esc(p.created_at)}</td>
@@ -169,6 +170,8 @@ $('#product-form').addEventListener('submit', async (e) => {
         keyword: $('#pf-keyword').value.trim(),
         max_price: $('#pf-max').value,
         min_price: $('#pf-min').value || 0,
+        push_max_price: $('#pf-push-max').value || 0,
+        push_min_price: $('#pf-push-min').value || 0,
         exclude_keywords: $('#pf-exclude').value.trim(),
         must_include: $('#pf-must').value.trim(),
       }),
@@ -205,6 +208,8 @@ async function editProduct(id) {
   $('#me-keyword').value = p.keyword;
   $('#me-max').value = p.max_price;
   $('#me-min').value = p.min_price;
+  $('#me-push-max').value = p.push_max_price || '';
+  $('#me-push-min').value = p.push_min_price || '';
   $('#me-exclude').value = p.exclude_keywords;
   $('#me-must').value = p.must_include || '';
   openModal('编辑商品');
@@ -215,6 +220,8 @@ async function openAddModal() {
   $('#me-keyword').value = '';
   $('#me-max').value = '';
   $('#me-min').value = '';
+  $('#me-push-max').value = '';
+  $('#me-push-min').value = '';
   $('#me-exclude').value = '';
   $('#me-must').value = '';
   openModal('添加商品');
@@ -235,6 +242,8 @@ $('#modal-form').addEventListener('submit', async (e) => {
     keyword: $('#me-keyword').value.trim(),
     max_price: $('#me-max').value,
     min_price: $('#me-min').value || 0,
+    push_max_price: $('#me-push-max').value || 0,
+    push_min_price: $('#me-push-min').value || 0,
     exclude_keywords: $('#me-exclude').value.trim(),
     must_include: $('#me-must').value.trim(),
   };
@@ -382,6 +391,21 @@ function renderDistribution(data) {
   const el = $('#chart-distribution');
   if (!distChart) distChart = echarts.init(el);
   const bins = data.distribution;
+  const pushMarks = [];
+  if (data.push_max_price) {
+    pushMarks.push({
+      yAxis: data.push_max_price,
+      lineStyle: { color: '#f87171', type: 'dashed' },
+      label: { formatter: `推送线 ¥${fmtAxisPrice(data.push_max_price)}`, color: '#f87171', fontSize: 10 },
+    });
+  }
+  if (data.push_min_price) {
+    pushMarks.push({
+      yAxis: data.push_min_price,
+      lineStyle: { color: '#34d399', type: 'dashed' },
+      label: { formatter: `推送线 ¥${fmtAxisPrice(data.push_min_price)}`, color: '#34d399', fontSize: 10 },
+    });
+  }
   const option = {
     backgroundColor: 'transparent',
     tooltip: {
@@ -413,6 +437,7 @@ function renderDistribution(data) {
       itemStyle: { color: '#4f8cff', borderRadius: [4, 4, 0, 0] },
       emphasis: { itemStyle: { color: '#34d399' } },
       barMaxWidth: 36,
+      markLine: pushMarks.length ? { symbol: 'none', data: pushMarks } : undefined,
     }],
   };
   distChart.setOption(option, true);
@@ -430,6 +455,21 @@ function renderTrend(data) {
   const el = $('#chart-trend');
   if (!trendChart) trendChart = echarts.init(el);
   const points = data.trend;
+  const pushMarks = [];
+  if (data.push_max_price) {
+    pushMarks.push({
+      yAxis: data.push_max_price,
+      lineStyle: { color: '#f87171', type: 'dashed' },
+      label: { formatter: `推送线 ¥${fmtAxisPrice(data.push_max_price)}`, color: '#f87171', fontSize: 10 },
+    });
+  }
+  if (data.push_min_price) {
+    pushMarks.push({
+      yAxis: data.push_min_price,
+      lineStyle: { color: '#34d399', type: 'dashed' },
+      label: { formatter: `推送线 ¥${fmtAxisPrice(data.push_min_price)}`, color: '#34d399', fontSize: 10 },
+    });
+  }
   if (!points.length) {
     trendChart.clear();
     trendChart.setOption({
@@ -472,6 +512,7 @@ function renderTrend(data) {
         series.push({
           name: '过滤后均价', type: 'line', data: points.map((p) => p.filtered_avg),
           smooth: true, symbol: 'circle', symbolSize: 6, lineStyle: { width: 3 }, itemStyle: { color: '#a78bfa' },
+          markLine: pushMarks.length ? { symbol: 'none', data: pushMarks } : undefined,
         });
       }
       series.push(
