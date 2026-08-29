@@ -159,8 +159,21 @@ def parse_price_extended(text: str, price_num: str = "", price_dec: str = "",
         except (ValueError, TypeError):
             return None, False
         dec = (price_dec or "").strip()
+        explicit_wan = "万" in (text or "") or "万" in (title or "")
+        lo, hi = WAN_INT_RANGE
         if dec == "":
-            # 无 decimal：普通整数价格（如 2400）
+            # 无 decimal：普通整数价格（如 2400）。
+            # 闲鱼万元商品的 DOM 有"X万"（number=3 + 独立"万"节点）和
+            # 纯缩写"¥3"（number=3、无 decimal、无"万"字）两种形态。
+            # 1<=number<10 时，有显式"万"、或监控区间支持万元级（plausible）、
+            # 或字面价远低于监测下限（suspicious）→ 按万元解释，避免 3 万被当 3 元。
+            plausible = max_price > 0 and num_val * WAN_UNIT <= max_price * WAN_CANDIDATE_MAX_MULTIPLIER
+            suspicious = (
+                min_price > 0 and num_val < min_price * WAN_SUSPICIOUS_LITERAL_RATIO
+                and plausible
+            )
+            if wan_scale and lo <= num_val < hi and (explicit_wan or plausible or suspicious):
+                return round(num_val * WAN_UNIT, 2), True
             return num_val, False
         # 有 decimal 段
         frac = "0" + dec if dec.startswith(".") else dec
@@ -170,7 +183,6 @@ def parse_price_extended(text: str, price_num: str = "", price_dec: str = "",
             return None, False
         # 万元缩写只能在有量级证据时启用：显式“万”或监控上限支持万元级。
         # 仅凭 number+decimal 无法区分 3.5 元配件和 3.5 万元设备，默认按字面价格。
-        explicit_wan = "万" in (text or "") or "万" in (title or "")
         plausible_wan = max_price > 0 and wan * WAN_UNIT <= max_price * WAN_CANDIDATE_MAX_MULTIPLIER
         # 字面价可疑低：高 min_price 监控下出现明显低于下限的字面价，
         # 判定为万元缩写漏标（万元解释需在监控上限 3 倍内，超预算按万元也不影响过滤）。
@@ -178,7 +190,6 @@ def parse_price_extended(text: str, price_num: str = "", price_dec: str = "",
             min_price > 0 and wan < min_price * WAN_SUSPICIOUS_LITERAL_RATIO
             and wan * WAN_UNIT <= max_price * WAN_CANDIDATE_MAX_MULTIPLIER
         )
-        lo, hi = WAN_INT_RANGE
         if wan_scale and lo <= num_val < hi and (explicit_wan or plausible_wan or suspicious_literal):
             return round(wan * WAN_UNIT, 2), True
         return wan, False

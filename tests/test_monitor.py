@@ -58,6 +58,27 @@ def test_parse_price_extended_plain_integer():
     assert not scaled
 
 
+def test_parse_price_extended_wan_without_decimal():
+    """回归：闲鱼"3万"拆成 number='3'、无 decimal 时，不得解析成 3 元。"""
+    # 显式"万"
+    price, scaled = parse_price_extended("¥3万", "3", "", True, max_price=30000)
+    assert price == pytest.approx(30000)
+    assert scaled
+    # 纯缩写"¥3"（无"万"字）+ 高监测区间 → 按万元（实为 3 万）
+    price, scaled = parse_price_extended("¥3", "3", "", True, max_price=30000,
+                                         min_price=26666)
+    assert price == pytest.approx(30000)
+    assert scaled
+    # 低监测区间（配件类）→ 保持字面价，不误伤
+    price, scaled = parse_price_extended("¥3", "3", "", True, max_price=50)
+    assert price == pytest.approx(3)
+    assert not scaled
+    # 普通整数不受影响
+    price, scaled = parse_price_extended("¥30", "30", "", True, max_price=30000)
+    assert price == pytest.approx(30)
+    assert not scaled
+
+
 # ── matches_keyword ────────────────────────────────────────────
 
 def test_matches_keyword_requires_model_suffixes():
