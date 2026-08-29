@@ -650,6 +650,7 @@ class GoofishMonitor:
             all_items: list[dict] = []
             seen_ids: set[str] = set()
             page_total = 1  # 分页指示 "当前/总数"，未知时按 1 处理
+            stale_rounds = 0  # 连续无新增的轮数，超过即视为已到底
             for _round in range(self.settings.get("max_scrape_pages", 30)):
                 # DOM 解析（主要）；万元判定由显式“万”或 max_price 量级共同确认
                 dom_items = await self._extract_from_dom(
@@ -662,16 +663,27 @@ class GoofishMonitor:
 
                 page_total = await self._current_page_total(page, page_total)
 
-                # 提前结束：收集足够多 / 已到最后一页
+                # 提前结束：收集足够多 / 只有一页 / 已到最后一页
                 if len(all_items) >= max_items or page_total <= 1:
                     break
                 if _round + 1 >= page_total:
                     break
 
-                # 点下一页（最后一个非禁用的 tiny 箭头 = 右箭头）
+                # 连续 2 轮无新增商品 → 已到底，终止（避免空翻）
+                if not new_ones:
+                    stale_rounds += 1
+                    if stale_rounds >= 2:
+                        break
+                else:
+                    stale_rounds = 0
+
+                # 点下一页并等待页码真正前进，确保下一页已加载完再收集
+                cur_page = await self._current_page_no(page)
                 if not await self._click_next_page(page):
                     break
-                await self._human_delay(1.5, 3.0)
+                if not await self._wait_page_advance(page, cur_page):
+                    break
+                await self._human_delay(1.0, 2.0)
 
             # 按关键词过滤，剔除"猜你喜欢"推荐区的无关商品
             all_items = [i for i in all_items if matches_keyword(i["title"], keyword)]
@@ -747,6 +759,38 @@ class GoofishMonitor:
         except Exception:
             pass
         return fallback
+
+    @staticmethod
+    async def _current_page_no(page: Page) -> int:
+        """读取当前页码（分页指示 "当前/总数" 的"当前"），失败返回 0。"""
+        try:
+            txt = await page.evaluate("""() => {
+                const el = [...document.querySelectorAll('*')]
+                    .find(e => /^\\s*\\d+\\s*\\/\\s*\\d+\\s*$/.test(e.textContent));
+                return el ? el.textContent.trim() : '';
+            }""")
+            if "/" in txt:
+                parts = txt.split("/")
+                if parts[0].strip().isdigit():
+                    return int(parts[0].strip())
+        except Exception:
+            pass
+        return 0
+
+    @staticmethod
+    async def _wait_page_advance(page: Page, prev_page: int) -> bool:
+        """点击翻页后等待页码前进或商品集合变化（最多 12 秒），避免收集到未刷新的旧页。"""
+        import time as _time
+        start = _time.monotonic()
+        while _time.monotonic() - start < 12:
+            cur = await GoofishMonitor._current_page_no(page)
+            if cur and cur != prev_page:
+                return True
+            try:
+                await page.wait_for_timeout(800)
+            except Exception:
+                return False
+        return False
 
     @staticmethod
     async def _click_next_page(page: Page) -> bool:
