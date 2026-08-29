@@ -464,6 +464,10 @@ class MonitorService:
             is_new = existing is None
             verdict = {"pass": False, "hard": [], "warn": []}
 
+            # 已忽略的商品：后续抓取直接跳过（不更新价格/状态、不评估、不推送）
+            if existing is not None and (existing["disposition"] or "new") == "ignored":
+                continue
+
             if is_new:
                 # 卖家信用 + 价格区间 + 排除词 + 必须包含 + 引流文案 综合评估
                 verdict = evaluate_item(

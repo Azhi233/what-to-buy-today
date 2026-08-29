@@ -496,7 +496,10 @@ function renderAnalysisTable(items, filter) {
   if (filter) {
     rows = items.filter((it) => it.price >= filter.from && it.price < filter.to);
   }
-  if (analysisGroup !== 'all') {
+  if (analysisGroup === 'all') {
+    // "全部"分类自动隐藏已忽略的商品（忽略分组 tab 仍可查看）
+    rows = rows.filter((it) => (it.disposition || 'new') !== 'ignored');
+  } else {
     rows = rows.filter((it) => (it.disposition || 'new') === analysisGroup);
   }
   if (priceSort) {
