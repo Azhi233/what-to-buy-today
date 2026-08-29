@@ -296,4 +296,8 @@ MONITOR_SETTINGS = {
 
     # 每页监控的商品数量上限
     "max_items_per_page": _env_int("MONITOR_MAX_ITEMS", 60),
+
+    # 搜索页滚动轮次：闲鱼为瀑布流无限滚动，轮次越多抓到的商品越多
+    # （同时请求也越多）。建议 6~10；设为 0 表示不滚动（仅首屏）。
+    "scroll_rounds": _env_int("MONITOR_SCROLL_ROUNDS", 6),
 }

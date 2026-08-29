@@ -30,6 +30,12 @@
 - 根因：playwright/jammy 基础镜像缺 `tzdata`，`TZ=Asia/Shanghai` 解析失败回退 UTC，导致日志与"上次检查"等时间戳比北京慢 8 小时（显示 10:xx 实为 18:xx 北京）
 - `Dockerfile` 安装 `tzdata`；`entrypoint.sh` 显式 `export TZ=Asia/Shanghai` 并写入 `/etc/localtime`，日志与仪表盘时间统一为北京时间
 
+### 抓取覆盖扩大（闲鱼网页端搜索单次仅渲染 30 条）
+- 实测确诊：闲鱼 web 搜索为固定 30 条渲染，无限滚动不再加载更多（滚动 7 轮 DOM 链接数不变）
+- `monitor.py` `_scroll_and_collect` 重写为"智能滚动"：持续滚动直到连续两轮无新商品或达到轮次上限（`MONITOR_SCROLL_ROUNDS`，默认 6），并在 DOM 无增长时立即退出
+- `config.py` 新增 `scroll_rounds` 设置项；`MONITOR_MAX_ITEMS` 默认上限 60，服务器版建议 `MONITOR_MAX_ITEMS=100`
+- 扩大覆盖的务实手段：**多关键词变体**（如 DGX spark / 英伟达DGX / DGX GB10 / DGX超算），同一商品按 item_id 自动去重不入重复；实测单轮原始覆盖 30→71 条（约 2.4 倍）
+
 ### 修复
 - 修复 `PRICE_ANOMALY_RATIO` 死配置：`evaluate_item` 两处调用均传入该配置，用户修改立即生效
 - 修复老商品重新评估漏传 `strict_unknown_credit`，与新商品路径配置保持一致

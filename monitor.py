@@ -676,13 +676,29 @@ class GoofishMonitor:
                 except Exception:
                     pass
 
-    async def _scroll_and_collect(self, page: Page):
-        """模拟人类滚动页面，触发懒加载。"""
-        scroll_rounds = random.randint(1, 3)
-        for _ in range(scroll_rounds):
+    async def _scroll_and_collect(self, page: Page) -> None:
+        """模拟人类滚动页面，触发懒加载。
+
+        闲鱼搜索为瀑布流无限滚动：只有滚动到底才会加载更多。
+        持续滚动直到"连续两轮没有新商品"（已到底）或达到轮次上限，
+        避免过度滚动触发风控。轮次上限由 MONITOR_SCROLL_ROUNDS 配置。
+        """
+        max_rounds = max(int(self.settings.get("scroll_rounds", 6)), 0)
+        idle = 0
+        seen_count = 0
+        for _ in range(max_rounds):
             try:
-                await page.mouse.wheel(0, random.randint(600, 1200))
-                await self._human_delay(0.8, 1.8)
+                count = await page.eval_on_selector_all(
+                    "a[href*='/item?id=']", "els => els.length")
+                if count <= seen_count:
+                    idle += 1
+                    if idle >= 2:
+                        break
+                else:
+                    idle = 0
+                seen_count = max(seen_count, count)
+                await page.mouse.wheel(0, random.randint(700, 1300))
+                await self._human_delay(1.0, 2.0)
             except Exception:
                 break
 
