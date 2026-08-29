@@ -47,6 +47,10 @@
 - 关键词收敛为 **DGX spark 单品**（删除拓展词：英伟达DGX / DGX GB10 / GX10 / GB10 / DGX超算），同一商品按 item_id 去重
 - 每词抓取上限 `MONITOR_MAX_ITEMS` 调至 180：实测单轮稳定提取 **178 条**（价格区间 25000-30000 内全部在售）
 
+### 仪表盘价格筛选 + 推送幂等
+- `market analysis` 商品列表新增**价格范围筛选**：最低价/最高价输入框 + 筛选/清除按钮，服务端 SQL 过滤（`/api/analysis` 支持 `price_min`/`price_max`），筛选结果同步更新列表、总数与分布图
+- 推送去重保障：推送前显式检查 `items.notified`，**已推送过的商品永不重复推送**（只推新增）；`notified` 标记随商品入库时写入，`已推送` 状态在列表可见
+
 ### 修复
 - 修复 `PRICE_ANOMALY_RATIO` 死配置：`evaluate_item` 两处调用均传入该配置，用户修改立即生效
 - 修复老商品重新评估漏传 `strict_unknown_credit`，与新商品路径配置保持一致

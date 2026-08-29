@@ -126,6 +126,13 @@
         <div class="panel">
           <div class="panel-header">
             <h3>商品列表 <span class="filter-badge" id="item-filter-badge" hidden></span></h3>
+            <div class="price-filter">
+              <input type="number" class="price-filter-input" id="filter-price-min" placeholder="最低价" min="0">
+              <span class="price-filter-sep">—</span>
+              <input type="number" class="price-filter-input" id="filter-price-max" placeholder="最高价" min="0">
+              <button class="btn btn-sm" id="btn-apply-price-filter">筛选</button>
+              <button class="btn btn-sm btn-ghost" id="btn-clear-price-filter" hidden>清除</button>
+            </div>
             <span class="hint" id="items-count"></span>
           </div>
           <div class="table-wrap">

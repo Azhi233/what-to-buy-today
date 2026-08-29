@@ -288,17 +288,48 @@ $('#analysis-keyword').addEventListener('change', () => {
   loadAnalysis();
 });
 $('#btn-analysis-refresh').addEventListener('click', loadAnalysis);
+$('#btn-apply-price-filter').addEventListener('click', () => {
+  activeFilter = null;
+  loadAnalysis();
+});
+$('#btn-clear-price-filter').addEventListener('click', () => {
+  $('#filter-price-min').value = '';
+  $('#filter-price-max').value = '';
+  activeFilter = null;
+  $('#item-filter-badge').hidden = true;
+  $('#btn-clear-price-filter').hidden = true;
+  loadAnalysis();
+});
+// 回车同样触发筛选
+['filter-price-min', 'filter-price-max'].forEach((id) => {
+  document.getElementById(id).addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { activeFilter = null; loadAnalysis(); }
+  });
+});
 
 async function loadAnalysis() {
   try {
     const kw = $('#analysis-keyword').value;
-    const data = await api('/api/analysis?keyword=' + encodeURIComponent(kw || 'all'));
+    const pmin = $('#filter-price-min').value.trim();
+    const pmax = $('#filter-price-max').value.trim();
+    let url = '/api/analysis?keyword=' + encodeURIComponent(kw || 'all');
+    if (pmin) url += '&price_min=' + encodeURIComponent(pmin);
+    if (pmax) url += '&price_max=' + encodeURIComponent(pmax);
+    const data = await api(url);
     if (!data.ok) {
       toast(data.error || '暂无数据', true);
       return;
     }
     analysisData = data;
     $('#items-count').textContent = `共 ${data.items.length} 条商品`;
+    // 显示当前价格筛选状态
+    if (pmin || pmax) {
+      const lo = pmin ? `¥${fmtPrice(Number(pmin))}` : '';
+      const hi = pmax ? `¥${fmtPrice(Number(pmax))}` : '';
+      $('#item-filter-badge').textContent = lo && hi ? `${lo} -- ${hi}` : (lo || hi);
+      $('#item-filter-badge').hidden = false;
+      $('#btn-clear-price-filter').hidden = false;
+    }
     renderDistribution(data);
     renderTrend(data);
     renderAnalysisTable(data.items, null);

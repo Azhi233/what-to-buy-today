@@ -276,10 +276,20 @@ def api_analysis():
         keyword = keywords[0] if keywords else ""
         if not keyword:
             return jsonify({"ok": False, "error": "暂无监控商品"})
+
+    def _parse_float(v):
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            return None
+
+    price_min = _parse_float(request.args.get("price_min"))
+    price_max = _parse_float(request.args.get("price_max"))
+
     if keyword == "all":
-        items = db.get_latest_items(limit=500)
+        items = db.get_latest_items(limit=500, price_min=price_min, price_max=price_max)
     else:
-        items = db.get_latest_items(keyword=keyword, limit=500)
+        items = db.get_latest_items(keyword=keyword, limit=500, price_min=price_min, price_max=price_max)
 
     data = {
         "ok": True,

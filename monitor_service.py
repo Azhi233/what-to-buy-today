@@ -512,7 +512,12 @@ class MonitorService:
                     await self._notify_drop(item, keyword, old_price)
 
         # 推送新匹配商品 — B4: 单轮>10条合并为摘要，避免 Bark/邮件 风暴
+        # 只推送新增商品：已推送过（notified=1）的不再重复推送（幂等保障）
         notified_count = 0
+        matches = [
+            it for it in matches
+            if not (self.db.get_item(it["item_id"]) or {}).get("notified")
+        ]
         if len(matches) > BATCH_SUMMARY_THRESHOLD:
             # 全部标记已推送
             for it in matches:
