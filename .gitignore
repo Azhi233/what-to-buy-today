@@ -17,6 +17,9 @@ venv/
 .env.server
 .env.local
 
+# 本地导出的明文登录 cookie（服务器本地扫码模式，含真实会话凭证）
+cookies.json
+
 # Logs
 *.log
 dashboard.pid

@@ -290,6 +290,10 @@ MONITOR_SETTINGS = {
     # 数据存储目录（已发现的商品会记录在这里，避免重复推送）
     "data_dir": _env("MONITOR_DATA_DIR", os.path.join(BASE_DIR, "data")),
 
+    # 登录 cookie 注入文件（服务器"本地扫码模式"）：本地导出明文 cookie 后
+    # 挂载到服务器，容器启动时注入（Windows app-bound 加密 cookie 无法跨平台解密）
+    "cookies_file": _env("MONITOR_COOKIES_FILE", ""),
+
     # 每页监控的商品数量上限
     "max_items_per_page": _env_int("MONITOR_MAX_ITEMS", 60),
 }

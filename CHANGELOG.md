@@ -12,6 +12,12 @@
 - 新增 `deploy/server-deploy.md`：完整部署手册（本地扫码→上传→启动→运维）
 - `.gitignore`：追加 `.env.server`/`.env.local` 防泄漏
 
+### 服务器版实测修复（容器全链路验证）
+- **跨平台 cookie 加密问题**：Windows 新版 Chromium 的 `unb`/`tracknick` cookie 使用 app-bound 加密（绑定 Windows 系统密钥），Linux 容器无法解密被丢弃 → 新增 `tools/export_cookies.py` 本地导出明文 cookie，`monitor.py` 启动时经 `MONITOR_COOKIES_FILE` 自动注入（注入后以 Linux 格式持久化，无需重复）
+- `tools/check_login.py` 修复 Cookies 路径：Chromium 89+ 的 cookie 库在 `Default/Network/Cookies`（原查 `Default/Cookies` 恒未命中）
+- `docker-compose.server.yml` 挂载 `cookies.json`；`.dockerignore` 排除 `cookies.json`（防明文凭证进镜像）
+- `deploy/server-deploy.md` 更新：明确 cookie 导出流程与 `DASHBOARD_TOKEN` 远程访问强制要求
+
 ### 修复
 - 修复 `PRICE_ANOMALY_RATIO` 死配置：`evaluate_item` 两处调用均传入该配置，用户修改立即生效
 - 修复老商品重新评估漏传 `strict_unknown_credit`，与新商品路径配置保持一致

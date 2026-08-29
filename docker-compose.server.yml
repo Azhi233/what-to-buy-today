@@ -17,6 +17,8 @@ services:
       # 必须：本地扫码上传的登录态与数据库
       - ./browser_profile:/app/browser_profile
       - ./data:/app/data
+      # 本地导出上传的明文登录 cookie（tools/export_cookies.py 生成）
+      - ./cookies.json:/app/cookies.json:ro
     restart: unless-stopped
     env_file:
       - path: .env.server

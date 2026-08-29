@@ -15,7 +15,9 @@
 
 import asyncio
 import hashlib
+import json
 import logging
+import os
 import random
 import re
 import subprocess
@@ -268,7 +270,33 @@ class GoofishMonitor:
         await self._context.add_init_script("""
             Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
         """)
+        await self._inject_login_cookies()
         logger.info(f"浏览器已启动 (headless={headless}, profile={self.user_data_dir})")
+
+    async def _inject_login_cookies(self) -> None:
+        """从 cookies 文件注入登录态（服务器"本地扫码模式"）。
+
+        Windows 版 Chromium 的部分 cookie（unb/tracknick）使用新版 app-bound
+        加密，Linux 容器无法解密；本地导出明文 cookie 后上传，容器启动时注入。
+        注入后 Chromium 以 Linux 格式持久化到 profile，重启无需重复注入。
+        """
+        cookies_file = self.settings.get("cookies_file") or os.environ.get("MONITOR_COOKIES_FILE", "")
+        if not cookies_file or not os.path.exists(cookies_file):
+            return
+        try:
+            with open(cookies_file, encoding="utf-8") as f:
+                cookies = json.load(f)
+            if not cookies:
+                return
+            # 已注入过的登录标识直接跳过，避免每次启动重复写入
+            existing = {c["name"] for c in await self._context.cookies("https://www.goofish.com")}
+            missing = [c for c in cookies if c.get("name") not in existing]
+            if not missing:
+                return
+            await self._context.add_cookies(missing)
+            logger.info(f"已注入 {len(missing)} 条登录 cookie（来自 {cookies_file}）")
+        except Exception as e:
+            logger.warning(f"注入登录 cookie 失败: {e}")
 
     async def stop(self):
         """关闭浏览器（登录状态会保留在配置目录中）。"""

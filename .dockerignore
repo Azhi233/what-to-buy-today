@@ -15,5 +15,6 @@ dashboard.pid
 venv
 .env
 .env.*
+cookies.json
 .pytest_cache
 .ruff_cache

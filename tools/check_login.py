@@ -39,10 +39,10 @@ def _resolve_profile_dir(arg: str) -> str:
 
 
 def _find_cookies_files(profile_dir: str) -> list[str]:
-    """找 Cookies 数据库文件（Chromium 新版为 Cookies，旧版为 Cookies-journal）。"""
+    """找 Cookies 数据库文件（Chromium 89+ 在 Default/Network/Cookies，旧版在 Default/Cookies）。"""
     found = []
-    for name in ("Cookies", "Cookies-journal"):
-        p = os.path.join(profile_dir, "Default", name)
+    for rel in ("Default", "Default/Network"):
+        p = os.path.join(profile_dir, rel, "Cookies")
         if os.path.exists(p):
             found.append(p)
     return found
