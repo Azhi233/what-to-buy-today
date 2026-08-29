@@ -1,6 +1,15 @@
 /* 闲鱼监控仪表盘 - 前端逻辑 */
 'use strict';
 
+/* 支持从 URL ?token= 传递并记忆仪表盘访问令牌：脚本/浏览器直接访问
+   http://<host>:5000/?token=xxx 后写入 localStorage，之后所有 API 请求自动带上。 */
+(function () {
+  try {
+    const t = new URLSearchParams(window.location.search).get('token');
+    if (t) localStorage.setItem('dashboard_token', t);
+  } catch (e) { /* 忽略（非浏览器/隐私模式等） */ }
+})();
+
 /* ───────── 工具函数 ───────── */
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => document.querySelectorAll(sel);

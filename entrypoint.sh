@@ -8,6 +8,12 @@ set -e
 
 RUNAS_ID=$(id -u pwuser 2>/dev/null || echo 1000)
 
+# ── 0. 清理上次退出可能残留的锁文件（跨容器重启会遗留，导致新实例拒绝启动）──
+# Xvfb 显示锁：stop/start（不重建容器）时 /tmp 保留，不清理则 Xvfb 报 "already active"
+rm -f /tmp/.X99-lock 2>/dev/null || true
+# Chromium profile 锁：down/up（重建容器）时卷保留，不清理则新实例报 "profile in use"
+rm -f /app/browser_profile/Singleton* /app/browser_profile/DevToolsActivePort 2>/dev/null || true
+
 # ── 1. 数据目录属主修正（幂等；宿主卷属主不符时用户无需手动改权限）──
 # /app 含 data/ 、 browser_profile/ 、dashboard.log/PID 等运行时文件，一并归 pwuser；
 # 仅修正需要的挂载点与可写路径，不改动镜像内只读的源码文件属主风险。

@@ -22,6 +22,10 @@
 - **Dockerfile 支持 `PIP_INDEX_URL` 构建参数**：国内服务器拉取 pypi 官方源极慢（playwright 37MB 卡死），可 `--build-arg PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple` 加速，默认官方源不变
 - 新增 `tools/clean_browser_cache.py`：仅清空 Chromium 缓存目录（Cache/Code Cache/GPUCache/Service Worker 等），**保留 Cookies/Local Storage 登录态与商品数据库**；服务器 crontab 每周一 04:00 执行（容器运行中直接清理，Chromium 自动重建）
 
+### 服务器公网运维修复（47.101.64.108 实测发现）
+- `entrypoint.sh` 启动时清理两类残留锁：`/tmp/.X99-lock`（`docker stop/start` 不重建容器时残留，会导致 Xvfb 报 "already active"）与 `browser_profile` 的 `Singleton*`/`DevToolsActivePort`（`docker down/up` 重建时卷残留，会导致 Chromium 报 "profile in use by another process"）——根治跨容器重启后监控浏览器起不来的问题
+- `static/app.js` 支持 `?token=` URL 注入并写入 localStorage：远程浏览器访问 `http://host:5000/?token=xxx` 后 API 自动携带 `X-Auth-Token`，仪表盘无需手动设置 token 即可加载
+
 ### 修复
 - 修复 `PRICE_ANOMALY_RATIO` 死配置：`evaluate_item` 两处调用均传入该配置，用户修改立即生效
 - 修复老商品重新评估漏传 `strict_unknown_credit`，与新商品路径配置保持一致
