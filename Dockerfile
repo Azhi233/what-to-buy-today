@@ -3,9 +3,12 @@ FROM mcr.microsoft.com/playwright/python:v1.44.0-jammy
 
 WORKDIR /app
 
-# 系统依赖已在基础镜像中；仅装 Python 依赖
+# 系统依赖已在基础镜像中；仅装 Python 依赖。
+# PIP_INDEX_URL 允许中国/受限网络用镜像源构建：
+#   docker build --build-arg PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple .
+ARG PIP_INDEX_URL=https://pypi.org/simple
 COPY requirements.txt ./
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -i "$PIP_INDEX_URL" -r requirements.txt
 
 COPY . .
 

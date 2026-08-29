@@ -104,6 +104,18 @@ scp cookies.json ubuntu@<服务器IP>:/opt/xianyu/
 docker compose -f docker-compose.server.yml restart xianyu-monitor
 ```
 
+### 每周自动清空浏览器缓存
+
+服务器已内置清理脚本 `tools/clean_browser_cache.py`（**只删 Chromium 缓存目录，保留登录态与商品数据库**）。部署后添加 crontab（每周一 04:00）：
+
+```bash
+crontab -e
+# 追加一行：
+0 4 * * 1 docker cp /opt/xianyu/tools/clean_browser_cache.py xianyu-monitor:/tmp/clean_cache.py && docker exec xianyu-monitor python /tmp/clean_cache.py >> /opt/xianyu/cache-clean.log 2>&1
+```
+
+> 容器运行中直接执行即可，Chromium 会自动重建缓存；实测单次可释放约 30MB。
+
 ### 更新代码
 
 ```bash

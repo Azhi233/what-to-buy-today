@@ -18,6 +18,10 @@
 - `docker-compose.server.yml` 挂载 `cookies.json`；`.dockerignore` 排除 `cookies.json`（防明文凭证进镜像）
 - `deploy/server-deploy.md` 更新：明确 cookie 导出流程与 `DASHBOARD_TOKEN` 远程访问强制要求
 
+### 服务器版公网部署实测（47.101.64.108，阿里云）
+- **Dockerfile 支持 `PIP_INDEX_URL` 构建参数**：国内服务器拉取 pypi 官方源极慢（playwright 37MB 卡死），可 `--build-arg PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple` 加速，默认官方源不变
+- 新增 `tools/clean_browser_cache.py`：仅清空 Chromium 缓存目录（Cache/Code Cache/GPUCache/Service Worker 等），**保留 Cookies/Local Storage 登录态与商品数据库**；服务器 crontab 每周一 04:00 执行（容器运行中直接清理，Chromium 自动重建）
+
 ### 修复
 - 修复 `PRICE_ANOMALY_RATIO` 死配置：`evaluate_item` 两处调用均传入该配置，用户修改立即生效
 - 修复老商品重新评估漏传 `strict_unknown_credit`，与新商品路径配置保持一致
